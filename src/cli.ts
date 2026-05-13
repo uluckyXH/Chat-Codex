@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { stdin, stdout } from "node:process";
+import { createInterface } from "node:readline/promises";
 import { Bridge } from "./bridge/bridge.js";
 import { MockChannelAdapter } from "./channels/mock/mock-channel-adapter.js";
 import { TerminalChannelAdapter } from "./channels/terminal/terminal-channel-adapter.js";
@@ -31,8 +33,14 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (area === "weixin" && command === "login") {
-    const adapter = new WeixinAdapter();
-    console.log((await adapter.login()).message);
+    const adapter = new WeixinAdapter({ verifyCodeProvider: askStdin });
+    const started = await adapter.startLogin();
+    console.log(started.message);
+    if (started.qrCodeText) {
+      console.log(started.qrCodeText);
+    }
+    const result = await adapter.waitLogin(started.sessionKey);
+    console.log(result.message);
     return;
   }
 
@@ -42,6 +50,15 @@ async function main(argv: string[]): Promise<void> {
   }
 
   throw new Error(`未知命令: ${argv.join(" ")}`);
+}
+
+async function askStdin(prompt: string): Promise<string> {
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    return (await rl.question(prompt)).trim();
+  } finally {
+    rl.close();
+  }
 }
 
 async function runMockCodexFlow(): Promise<void> {

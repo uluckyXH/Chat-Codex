@@ -9,5 +9,5 @@ test("WeixinAdapter shell implements channel contract and reports login_required
   assert.equal(adapter.id, "weixin");
   assert.equal(adapter.getCapabilities().login, "qr");
   assert.equal((await adapter.getStatus()).state, "login_required");
-  assert.match((await adapter.login()).message, /第二阶段/);
+  assert.equal(adapter.hasMessageHandler(), false);
 });

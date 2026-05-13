@@ -106,7 +106,8 @@ Terminal / Weixin / future channels
 
 - `MockChannelAdapter` 用于自动化测试。
 - `TerminalChannelAdapter` 用于本地 CLI 交互和管道测试，模拟微信输入输出。
-- `WeixinAdapter` 当前是协议壳，返回 `login_required`，第二阶段再实现登录、收消息和发消息。
+- `WeixinAdapter` 已进入第二阶段初版：二维码登录 API、登录确认轮询、账号 token 文件存储、文本 `sendmessage`、入站消息映射已经实现并通过 fake-fetch 测试。
+- 真实微信扫码登录、`getupdates` 长轮询闭环和真实微信收发需要用户后续协助测试。
 - `MockCodexAdapter` 用于稳定测试审批、阶段性事件和命令。
 - `ExecCodexAdapter` 已具备解析 `codex exec --json` 的基础能力，真实 Codex CLI 联调作为下一步硬化项。
 
@@ -213,6 +214,15 @@ WeixinAdapter implements ChannelAdapter
 - 把微信原始消息转换成 `ChannelMessage`。
 - 把 `ChannelTarget` 转换成微信发送参数。
 - 上报微信登录态、连接态和错误。
+
+当前实现说明：
+
+- 不 import `openclaw/plugin-sdk`，避免重新引入 OpenClaw runtime。
+- 参考 `openclaw-weixin@2.4.3` 的 HTTP JSON API，直接实现 `get_bot_qrcode`、`get_qrcode_status`、`getupdates`、`sendmessage`、`notifystart`、`notifystop` 的薄客户端。
+- 登录轮询支持 `need_verifycode` 分支；CLI 会提示输入手机微信显示的配对数字后继续轮询。
+- 登录 token 默认保存在项目根目录下 `state/weixin/`，该目录被 Git 忽略。
+- 账号 ID 会做文件名安全归一化，例如 `abc@im.bot` 归一化为 `abc-im-bot`。
+- `context_token` 会从微信入站消息带入 `ChannelTarget.context.contextToken`，发送回复时回传给 `sendmessage`。
 
 它不负责：
 

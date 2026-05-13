@@ -71,6 +71,16 @@ Codex <-> Middleware Core <-> WeixinAdapter <-> openclaw-weixin extracted commun
 npm test
 npm run cli:mock
 npm run cli:terminal:mock
+npm run cli:terminal:codex
 ```
 
 其中 `cli:terminal:mock` 是本地终端通道，作用是模拟微信消息进入中间件；真实微信登录、收消息和发消息仍属于第二阶段。
+
+第二阶段本地验证入口：
+
+```bash
+npm run cli:weixin:status
+npm run cli:weixin:login
+```
+
+`weixin login` 已具备二维码登录入口，但真实扫码登录需要用户在终端中协助完成，完成后要追加真实微信通道测试报告。

@@ -14,7 +14,9 @@
     "test:integration": "npm run build && node --test dist/tests/integration/*.test.js",
     "cli:mock": "npm run build && node dist/src/cli.js codex test",
     "cli:terminal:mock": "npm run build && node dist/src/cli.js terminal mock",
-    "cli:weixin:status": "npm run build && node dist/src/cli.js weixin status"
+    "cli:terminal:codex": "npm run build && node dist/src/cli.js terminal codex",
+    "cli:weixin:status": "npm run build && node dist/src/cli.js weixin status",
+    "cli:weixin:login": "npm run build && node dist/src/cli.js weixin login"
   },
   "engines": {
     "node": ">=22"

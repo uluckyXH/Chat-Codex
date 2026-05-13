@@ -42,7 +42,8 @@ Codex <-> Codex Adapter <-> Middleware Core <-> Weixin Adapter <-> WeChat
 - `Bridge Core`、命令处理、审批管理、内存状态存储、日志。
 - `MockCodexAdapter`。
 - `ExecCodexAdapter` 初版，用于后续通过 `codex exec --json` 做真实 Codex CLI 验证。
-- `WeixinAdapter` 协议壳，当前状态为 `login_required`，真实登录和收发消息放入第二阶段。
+- `WeixinAdapter` 第一版：已实现二维码登录 API 入口、登录确认轮询、账号 token 本地存储、文本 `sendmessage` 请求、微信入站消息到通用 `ChannelMessage` 的转换。
+- `WeixinAdapter` 真实扫码登录和真实微信收发仍需用户后续协助测试。
 - 本地单元测试、集成测试和中文测试报告。
 
 已经本地保存的 `openclaw-weixin` 微信通讯 npm 包：
