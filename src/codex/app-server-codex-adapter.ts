@@ -65,7 +65,15 @@ interface TurnQueueRecord {
   turnId: string;
   queue: AsyncEventQueue<CodexEvent>;
   finalText: string;
+  progressDrafts: Map<string, ProgressDraft>;
+  emittedProgress: Set<string>;
   closed: boolean;
+}
+
+interface ProgressDraft {
+  kind: CodexProgressKind;
+  text: string;
+  prefix?: string;
 }
 
 export class AppServerCodexAdapter implements CodexAdapter {
@@ -189,6 +197,8 @@ export class AppServerCodexAdapter implements CodexAdapter {
       turnId,
       queue,
       finalText: "",
+      progressDrafts: new Map(),
+      emittedProgress: new Set(),
       closed: false,
     });
     for (const event of this.earlyTurnEvents.get(turnId) ?? []) {
@@ -333,7 +343,6 @@ export class AppServerCodexAdapter implements CodexAdapter {
         requestAttestation: false,
         optOutNotificationMethods: [
           "command/exec/outputDelta",
-          "item/plan/delta",
           "item/reasoning/textDelta",
         ],
       },
@@ -491,12 +500,24 @@ export class AppServerCodexAdapter implements CodexAdapter {
     }
     if (notification.method === "item/reasoning/summaryTextDelta") {
       const delta = stringValue(params.delta);
-      if (delta) this.pushTurnEvent(turnId, { type: "assistant.progress", sessionId, turnId, text: delta, kind: "reasoning" });
+      const itemId = stringValue(params.itemId);
+      if (turn && itemId && delta) this.appendProgressDelta(turn, sessionId, turnId, itemId, delta, "reasoning");
       return;
     }
     if (notification.method === "turn/plan/updated") {
       const text = textFromPlan(params);
-      if (text) this.pushTurnEvent(turnId, { type: "assistant.progress", sessionId, turnId, text: `计划更新: ${text}`, kind: "todo" });
+      if (turn && text) this.pushProgressEvent(turn, sessionId, turnId, `计划更新: ${text}`, "todo");
+      return;
+    }
+    if (notification.method === "item/started") {
+      if (!turn) return;
+      this.handleItemStarted(turn, sessionId, turnId, objectValue(params.item));
+      return;
+    }
+    if (notification.method === "item/plan/delta") {
+      const delta = stringValue(params.delta);
+      const itemId = stringValue(params.itemId);
+      if (turn && itemId && delta) this.appendProgressDelta(turn, sessionId, turnId, itemId, delta, "todo", "计划更新: ");
       return;
     }
     if (notification.method === "item/commandExecution/outputDelta") {
@@ -550,6 +571,8 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   private handleItemCompleted(turn: TurnQueueRecord, sessionId: string, turnId: string, item: Record<string, unknown>): void {
     const itemType = stringValue(item.type);
+    const itemId = stringValue(item.id);
+    if (itemId) this.flushProgressDraft(turn, sessionId, turnId, itemId);
     if (itemType === "agentMessage") {
       const text = stringValue(item.text);
       if (text) {
@@ -564,13 +587,68 @@ export class AppServerCodexAdapter implements CodexAdapter {
         .filter((entry): entry is string => Boolean(entry))
         .join("\n")
         .trim();
-      if (text) turn.queue.push({ type: "assistant.progress", sessionId, turnId, text, kind: "reasoning" });
+      if (text) this.pushProgressEvent(turn, sessionId, turnId, text, "reasoning");
+      return;
+    }
+    if (itemType === "plan") {
+      const text = stringValue(item.text);
+      if (text) this.pushProgressEvent(turn, sessionId, turnId, `计划更新: ${text}`, "todo");
       return;
     }
     const progress = progressFromThreadItem(item);
     if (progress) {
-      turn.queue.push({ type: "assistant.progress", sessionId, turnId, text: progress.text, kind: progress.kind });
+      this.pushProgressEvent(turn, sessionId, turnId, progress.text, progress.kind);
     }
+  }
+
+  private handleItemStarted(turn: TurnQueueRecord, sessionId: string, turnId: string, item: Record<string, unknown>): void {
+    const itemType = stringValue(item.type);
+    if (itemType === "reasoning") {
+      this.pushProgressEvent(turn, sessionId, turnId, "正在分析...", "reasoning");
+    } else if (itemType === "plan") {
+      this.pushProgressEvent(turn, sessionId, turnId, "正在规划...", "todo");
+    }
+  }
+
+  private appendProgressDelta(
+    turn: TurnQueueRecord,
+    sessionId: string,
+    turnId: string,
+    itemId: string,
+    delta: string,
+    kind: CodexProgressKind,
+    prefix?: string,
+  ): void {
+    const draft = turn.progressDrafts.get(itemId) ?? { kind, text: "", prefix };
+    draft.text += delta;
+    draft.kind = kind;
+    draft.prefix = prefix;
+    turn.progressDrafts.set(itemId, draft);
+    if (shouldFlushProgressDraft(draft.text)) {
+      this.flushProgressDraft(turn, sessionId, turnId, itemId);
+    }
+  }
+
+  private flushProgressDraft(turn: TurnQueueRecord, sessionId: string, turnId: string, itemId: string): void {
+    const draft = turn.progressDrafts.get(itemId);
+    if (!draft) return;
+    turn.progressDrafts.delete(itemId);
+    const text = draft.text.trim();
+    if (!text) return;
+    this.pushProgressEvent(turn, sessionId, turnId, `${draft.prefix ?? ""}${text}`, draft.kind);
+  }
+
+  private pushProgressEvent(
+    turn: TurnQueueRecord,
+    sessionId: string,
+    turnId: string,
+    text: string,
+    kind: CodexProgressKind,
+  ): void {
+    const normalized = text.trim();
+    if (!normalized || turn.emittedProgress.has(normalized)) return;
+    turn.emittedProgress.add(normalized);
+    turn.queue.push({ type: "assistant.progress", sessionId, turnId, text: normalized, kind });
   }
 
   private closeTurn(turnId: string, status: "idle" | "failed", error?: string): void {
@@ -741,6 +819,11 @@ function textFromPlan(params: Record<string, unknown>): string | undefined {
     .filter(Boolean)
     .at(-1);
   return active;
+}
+
+function shouldFlushProgressDraft(text: string): boolean {
+  const normalized = text.trim();
+  return normalized.length >= 80 || /[。！？.!?]\s*$/.test(normalized) || normalized.includes("\n");
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
