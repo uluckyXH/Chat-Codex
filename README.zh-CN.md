@@ -53,6 +53,12 @@ npm run cli:weixin:codex -- --session last --permission approval --progress brie
 
 当 Codex 回复中出现可访问的媒体引用时，中间件会在发送文本后尝试发送媒体消息。图片会识别常见图片后缀；普通文件只从显式引用中提取，例如 Markdown 链接、`MEDIA:`/`FILE:` 指令、`文件:`/`File:` 标签，避免把进度里的代码路径都当附件发送。本地文件必须存在。微信发送图片使用 `image_item`，发送普通文件使用 `file_item`，底层都会走 `getuploadurl` + CDN 上传；如果通道不支持媒体或发送失败，会额外发送一条包含文件位置的文本说明。
 
+## 微信登录态
+
+默认微信登录态保存在项目根目录的 `state/weixin/`，该目录已被 `.gitignore` 忽略，不会提交到 Git。账号索引在 `state/weixin/accounts.json`，每个账号的 token 和轮询游标保存在 `state/weixin/accounts/<accountId>.json`。
+
+要让微信登录失效，可以停止中间件后删除整个 `state/weixin/` 目录；如果只想删除某个账号，删除对应的 `state/weixin/accounts/<accountId>.json`，必要时再从 `state/weixin/accounts.json` 里移除该账号 ID。下次运行 `npm run cli:weixin:codex` 或 `npm run cli:weixin:login` 时会重新进入扫码登录。
+
 ## 微信侧命令
 
 - `/help`：查看命令。

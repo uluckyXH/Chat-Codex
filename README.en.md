@@ -53,6 +53,12 @@ Weixin outbound messages are serialized with a small interval to reduce dropped 
 
 When Codex output contains an accessible media reference, the bridge sends the text first and then attempts a media message. Images are detected from common image suffixes. Regular files are extracted only from explicit references such as Markdown links, `MEDIA:`/`FILE:` directives, and `File:`/`Attachment:` labels, so code paths in progress summaries are not sent as attachments. Local files must exist. Weixin sends images as `image_item` and regular files as `file_item`; both use `getuploadurl` plus CDN upload. Unsupported channels or failed media sends get a text fallback with the file location.
 
+## Weixin Login State
+
+By default, Weixin login state is stored under `state/weixin/` in the project root. The directory is ignored by Git. The account index is `state/weixin/accounts.json`; each account token and polling cursor is stored in `state/weixin/accounts/<accountId>.json`.
+
+To invalidate Weixin login, stop the middleware and delete the whole `state/weixin/` directory. To remove only one account, delete its `state/weixin/accounts/<accountId>.json` file and, if needed, remove that account ID from `state/weixin/accounts.json`. The next `npm run cli:weixin:codex` or `npm run cli:weixin:login` run will start QR login again.
+
 ## Channel Commands
 
 - `/help`: show available commands.
