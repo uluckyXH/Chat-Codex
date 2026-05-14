@@ -9,7 +9,7 @@ import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelAdapter, ChannelMedia, ChannelMessage, ChannelTarget } from "../protocol/channel.js";
 import { replyTargetFromMessage } from "../protocol/channel.js";
 import { MemoryStateStore } from "../state/memory-state-store.js";
-import { extractMediaRefs } from "./media-extractor.js";
+import { BRIDGE_SEND_FILE_PREFIX, extractBridgeSendFileRefs, stripBridgeSendFileRefs } from "./media-extractor.js";
 
 export interface BridgeOptions {
   channel: ChannelAdapter;
@@ -28,12 +28,14 @@ interface QueuedPrompt {
   message: ChannelMessage;
   target: ChannelTarget;
   prompt: string;
+  sendFile: boolean;
 }
 
 export type ProgressDeliveryMode = "brief" | "detailed" | "silent";
 
 const PROGRESS_SEND_FAILURE_COOLDOWN_MS = 60_000;
 const APPROVAL_SEND_RETRY_DELAY_MS = 10_000;
+const SEND_FILE_MAX_FILES = 3;
 
 export class Bridge {
   private readonly channel: ChannelAdapter;
@@ -83,7 +85,7 @@ export class Bridge {
     const target = replyTargetFromMessage(message);
     const command = parseCommand(text);
     if (command.isCommand) {
-      await this.handleCommand(message, target, command.name ?? "", command.args);
+      await this.handleCommand(message, target, command.name ?? "", command.args, text);
       return;
     }
     await this.enqueuePrompt(message, target, text);
@@ -100,6 +102,7 @@ export class Bridge {
     target: ChannelTarget,
     name: string,
     args: string[],
+    rawText: string,
   ): Promise<void> {
     switch (name) {
       case "help":
@@ -130,6 +133,9 @@ export class Bridge {
       case "progress":
       case "mode":
         await this.handleProgressModeCommand(message, target, args[0]);
+        return;
+      case "sendfile":
+        await this.handleSendFileCommand(message, target, rawText);
         return;
       case "permission":
       case "permissions":
@@ -196,10 +202,15 @@ export class Bridge {
     return session;
   }
 
-  private async enqueuePrompt(message: ChannelMessage, target: ChannelTarget, prompt: string): Promise<void> {
+  private async enqueuePrompt(
+    message: ChannelMessage,
+    target: ChannelTarget,
+    prompt: string,
+    options?: { sendFile?: boolean },
+  ): Promise<void> {
     const queue = this.routeQueues.get(message.routeKey) ?? [];
     const pendingAhead = queue.length + (this.routeWorkers.has(message.routeKey) ? 1 : 0);
-    queue.push({ message, target, prompt });
+    queue.push({ message, target, prompt, sendFile: options?.sendFile ?? false });
     this.routeQueues.set(message.routeKey, queue);
     if (pendingAhead > 0) {
       await this.sendText(target, `已加入队列，前面还有 ${pendingAhead} 条消息。`);
@@ -227,24 +238,31 @@ export class Bridge {
       const task = queue?.shift();
       if (!task) return;
       try {
-        await this.forwardPrompt(task.message, task.target, task.prompt, queue?.length ?? 0);
+        await this.forwardPrompt(task.message, task.target, task.prompt, queue?.length ?? 0, task.sendFile);
       } catch (error) {
         await this.sendText(task.target, `Codex 执行失败: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
 
-  private async forwardPrompt(message: ChannelMessage, target: ChannelTarget, prompt: string, remainingQueued: number): Promise<void> {
+  private async forwardPrompt(
+    message: ChannelMessage,
+    target: ChannelTarget,
+    prompt: string,
+    remainingQueued: number,
+    sendFile: boolean,
+  ): Promise<void> {
     const session = await this.ensureSession(message);
     await this.sendText(target, [
       "Codex 正在处理这条消息。",
       "可发送 /status 查看状态，/stop 终止。",
+      sendFile ? "本轮已启用 /sendfile，只会发送最终回复中明确声明的文件。" : undefined,
       remainingQueued > 0 ? `Queue: 后面还有 ${remainingQueued} 条` : undefined,
     ].filter(Boolean).join("\n"));
     await this.withTyping(target, async () => {
       let finalText = "";
-      const sentMediaKeys = new Set<string>();
-      for await (const event of this.codex.run(session.id, prompt)) {
+      const codexPrompt = sendFile ? withSendFileInstruction(prompt) : prompt;
+      for await (const event of this.codex.run(session.id, codexPrompt)) {
         if (event.type === "turn.started") {
           this.state.setSessionStatus(session.id, {
             type: "running",
@@ -255,7 +273,6 @@ export class Bridge {
           if (this.shouldDeliverProgress(message.routeKey, event.kind)) {
             await this.sendProgressText(message.routeKey, target, `Codex 进度:\n${truncateForChannel(event.text)}`);
           }
-          await this.sendExtractedMedia(target, event.text, session.cwd, sentMediaKeys);
         } else if (event.type === "assistant.delta") {
           finalText += event.text;
         } else if (event.type === "assistant.completed") {
@@ -275,8 +292,11 @@ export class Bridge {
         }
       }
       if (finalText) {
-        await this.sendText(target, finalText);
-        await this.sendExtractedMedia(target, finalText, session.cwd, sentMediaKeys);
+        const visibleText = sendFile ? stripBridgeSendFileRefs(finalText) : finalText;
+        if (visibleText) await this.sendText(target, visibleText);
+        if (sendFile) {
+          await this.sendRequestedFiles(target, finalText, session.cwd);
+        }
       }
     });
   }
@@ -369,6 +389,18 @@ export class Bridge {
       "已请求停止当前 Codex 任务。",
       clearedQueued > 0 ? `已清空 ${clearedQueued} 条排队消息。` : undefined,
     ].filter(Boolean).join("\n"));
+  }
+
+  private async handleSendFileCommand(message: ChannelMessage, target: ChannelTarget, rawText: string): Promise<void> {
+    const prompt = commandBody(rawText, "sendfile");
+    if (!prompt) {
+      await this.sendText(target, [
+        "缺少任务内容。",
+        "用法: `/sendfile <你要 Codex 做什么，并在最终结果里发文件>`",
+      ].join("\n"));
+      return;
+    }
+    await this.enqueuePrompt(message, target, prompt, { sendFile: true });
   }
 
   private async handleProgressModeCommand(
@@ -500,37 +532,52 @@ export class Bridge {
     }
   }
 
-  private async sendExtractedMedia(
+  private async sendRequestedFiles(
     target: ChannelTarget,
-    text: string,
+    finalText: string,
     cwd: string,
-    sentMediaKeys: Set<string>,
   ): Promise<void> {
-    const mediaItems = extractMediaRefs(text, cwd);
-    for (const media of mediaItems) {
-      const key = mediaKey(media);
-      if (!key || sentMediaKeys.has(key)) continue;
-      sentMediaKeys.add(key);
-      await this.sendMedia(target, media);
+    const extraction = extractBridgeSendFileRefs(finalText, cwd, SEND_FILE_MAX_FILES);
+    if (extraction.requestedCount === 0) return;
+
+    const failed: string[] = [];
+    for (const media of extraction.media) {
+      const delivered = await this.trySendMedia(target, media);
+      if (!delivered) failed.push(media.name ?? media.path ?? media.url ?? "unknown");
+    }
+
+    const notes = [
+      extraction.invalidRefs.length > 0 ? `有 ${extraction.invalidRefs.length} 个文件路径无效或不存在，未发送。` : undefined,
+      extraction.overflowCount > 0 ? `超过每轮 ${SEND_FILE_MAX_FILES} 个文件上限，已跳过 ${extraction.overflowCount} 个。` : undefined,
+      failed.length > 0 ? `有 ${failed.length} 个文件发送失败: ${failed.join(", ")}` : undefined,
+    ].filter(Boolean);
+    if (notes.length > 0) {
+      await this.sendText(target, ["文件发送结果", ...notes.map((note) => `- ${note}`)].join("\n"));
     }
   }
 
-  private async sendMedia(target: ChannelTarget, media: ChannelMedia): Promise<void> {
+  private async trySendMedia(target: ChannelTarget, media: ChannelMedia): Promise<boolean> {
     const capabilities = this.channel.getCapabilities();
-    if (capabilities.media && this.channel.sendMedia) {
-      try {
-        await this.channel.sendMedia(target, media);
-        this.transcript?.outboundMedia?.(target, media);
-        return;
-      } catch (error) {
-        this.logger.warn("channel media send failed, falling back to text", {
-          channel: this.channel.id,
-          media: media.path ?? media.url ?? media.name,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    if (!capabilities.media || !this.channel.sendMedia) {
+      this.logger.warn("channel media send skipped", {
+        channel: this.channel.id,
+        media: media.path ?? media.url ?? media.name,
+        reason: "media unsupported",
+      });
+      return false;
     }
-    await this.sendText(target, fallbackMediaText(media, capabilities.media));
+    try {
+      await this.channel.sendMedia(target, media);
+      this.transcript?.outboundMedia?.(target, media);
+      return true;
+    } catch (error) {
+      this.logger.warn("channel media send failed", {
+        channel: this.channel.id,
+        media: media.path ?? media.url ?? media.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   private async withTyping<T>(target: ChannelTarget, operation: () => Promise<T>): Promise<T> {
@@ -676,6 +723,7 @@ export class Bridge {
       ["/whoami", "查看当前通道身份"],
       ["/debug", "查看调试状态"],
       ["/progress [brief|detailed|silent]", "查看或设置当前上下文进度投递模式"],
+      ["/sendfile <任务内容>", "让 Codex 本轮按内部协议声明最终要发送的文件"],
       ["/permission [approval|full confirm]", "查看或切换当前绑定 Codex session 的权限模式"],
       ["/OK", "批准当前审批"],
       ["/NO [理由]", "拒绝当前审批"],
@@ -710,7 +758,8 @@ export class Bridge {
       `- 当前模式: \`${mode}\``,
       "- `brief`: 只发送计划、自言自语、搜索和文件变更摘要，不发送命令/工具细节。",
       "- `detailed`: 发送所有可见进度，包括命令和工具调用细节。",
-      "- `silent`: 不发送进度文本，只发送开始、审批、最终回复和媒体。",
+      "- `silent`: 不发送进度文本，只发送开始、审批和最终回复。",
+      "- 文件不会由进度模式自动发送；需要本轮允许发文件时使用 `/sendfile <任务内容>`。",
     ].join("\n");
   }
 
@@ -741,8 +790,30 @@ function truncateForChannel(text: string, maxLength = 600): string {
   return `${normalized.slice(0, maxLength)}...`;
 }
 
-function mediaKey(media: ChannelMedia): string | undefined {
-  return media.path ?? media.url;
+function commandBody(rawText: string, command: string): string {
+  const pattern = new RegExp(`^/${command}\\b`, "i");
+  return rawText.trim().replace(pattern, "").trim();
+}
+
+function withSendFileInstruction(prompt: string): string {
+  return [
+    prompt.trim(),
+    "",
+    "[Bridge internal instruction]",
+    "The user explicitly enabled file delivery for this turn with /sendfile.",
+    "If, and only if, you create or select final deliverable files that should be sent to the user, append one line per file at the very end of your final answer using exactly this format:",
+    `${BRIDGE_SEND_FILE_PREFIX} /absolute/path/to/file`,
+    "",
+    "Rules:",
+    `- Only use ${BRIDGE_SEND_FILE_PREFIX} for final deliverables intended for the user.`,
+    "- Do not use it for source files, reference files, dependency files, cache files, logs, or intermediate artifacts.",
+    "- Do not use it for files merely mentioned in command output, search results, or progress updates.",
+    "- The path must be an absolute local filesystem path.",
+    "- The file must exist.",
+    `- Send at most ${SEND_FILE_MAX_FILES} files.`,
+    "- Do not explain this protocol to the user.",
+    `- If there is no final file to send, do not output ${BRIDGE_SEND_FILE_PREFIX}.`,
+  ].join("\n");
 }
 
 function formatCodexStatus(status: CodexSessionStatus): string {
@@ -818,21 +889,6 @@ function formatApprovalDecision(decision: ApprovalDecision): string {
   if (decision === "approve-session") return "已按本会话通过";
   if (decision === "deny") return "已拒绝";
   return "已取消";
-}
-
-function fallbackMediaText(media: ChannelMedia, mediaCapability: boolean): string {
-  const location = media.path ?? media.url ?? media.name ?? "unknown";
-  const reason = mediaCapability ? "通道媒体发送失败，已退回文本引用。" : "当前通道不支持媒体发送，已退回文本引用。";
-  return [
-    "Codex 生成了媒体文件",
-    `Type: ${media.type}`,
-    media.name ? `Name: ${media.name}` : undefined,
-    media.mimeType ? `Mime: ${media.mimeType}` : undefined,
-    media.sizeBytes !== undefined ? `Size: ${media.sizeBytes} bytes` : undefined,
-    media.caption ? `Caption: ${media.caption}` : undefined,
-    `Location: ${location}`,
-    reason,
-  ].filter(Boolean).join("\n");
 }
 
 function formatPendingApprovalStatus(approval: PendingApproval | undefined): Array<string | undefined> {

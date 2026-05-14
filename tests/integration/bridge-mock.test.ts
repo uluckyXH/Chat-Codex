@@ -39,6 +39,41 @@ class ProgressCodexAdapter extends MockCodexAdapter {
   }
 }
 
+class ProgressMediaCodexAdapter extends MockCodexAdapter {
+  constructor(private readonly imagePath: string) {
+    super();
+  }
+
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = `progress-media-turn-${Date.now()}`;
+    yield { type: "turn.started", sessionId, turnId };
+    yield { type: "assistant.progress", sessionId, turnId, kind: "file_change", text: `文件变更完成: ${this.imagePath}` };
+    yield { type: "assistant.completed", sessionId, turnId, text: "完成" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class SendFileCodexAdapter extends MockCodexAdapter {
+  readonly prompts: string[] = [];
+
+  constructor(private readonly filePath: string) {
+    super();
+  }
+
+  override async *run(sessionId: string, prompt: string): AsyncIterable<CodexEvent> {
+    this.prompts.push(prompt);
+    const turnId = `send-file-turn-${Date.now()}`;
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "assistant.completed",
+      sessionId,
+      turnId,
+      text: `文件已准备好。\nBRIDGE_SEND_FILE: ${this.filePath}`,
+    };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
 class ManyProgressCodexAdapter extends MockCodexAdapter {
   override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
     const turnId = `many-progress-turn-${Date.now()}`;
@@ -133,6 +168,19 @@ class ApprovalFlakyChannelAdapter extends MockChannelAdapter {
       }
     }
     return super.sendText(target, text);
+  }
+}
+
+class FailingMediaChannelAdapter extends MockChannelAdapter {
+  mediaAttempts = 0;
+
+  constructor() {
+    super({ media: true });
+  }
+
+  override async sendMedia(_target: ChannelTarget, _media: ChannelMedia): Promise<SendResult> {
+    this.mediaAttempts += 1;
+    throw new Error("cdn upload 500");
   }
 }
 
@@ -396,7 +444,7 @@ test("Bridge emits transcript events for inbound channel text and outbound repli
   assert.ok(transcript.outboundEvents.some((event) => event.text === "Mock Codex 回复: 你好，打印到终端"));
 });
 
-test("Bridge forwards generated image refs as channel media and transcript media events", async () => {
+test("Bridge treats generated image refs as text for normal prompts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-media-test-"));
   const imagePath = path.join(root, "screenshot.png");
   fs.writeFileSync(imagePath, "png");
@@ -410,11 +458,72 @@ test("Bridge forwards generated image refs as channel media and transcript media
   await bridge.waitForIdle();
   await bridge.stop();
 
+  assert.equal(channel.sentMedia.length, 0);
+  assert.equal(transcript.outboundMediaEvents.length, 0);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes(imagePath)));
+});
+
+test("Bridge does not extract media from progress events", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-progress-media-test-"));
+  const imagePath = path.join(root, "progress.png");
+  fs.writeFileSync(imagePath, "png");
+  const channel = new MockChannelAdapter({ media: true });
+  const codex = new ProgressMediaCodexAdapter(imagePath);
+  const bridge = new Bridge({ channel, codex, cwd: root });
+
+  await bridge.start();
+  await channel.emitText("跑一个会列出图片路径的任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.equal(channel.sentMedia.length, 0);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes(imagePath)));
+});
+
+test("Bridge sends final declared files for /sendfile and strips bridge protocol text", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-sendfile-test-"));
+  const imagePath = path.join(root, "result.png");
+  fs.writeFileSync(imagePath, "png");
+  const channel = new MockChannelAdapter({ media: true });
+  const codex = new SendFileCodexAdapter(imagePath);
+  const transcript = new CapturingTranscriptSink();
+  const bridge = new Bridge({ channel, codex, cwd: root, transcript });
+
+  await bridge.start();
+  await channel.emitText("/sendfile 生成结果图并发给我");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.equal(codex.prompts.length, 1);
+  assert.ok(codex.prompts[0].includes("生成结果图并发给我"));
+  assert.ok(codex.prompts[0].includes("BRIDGE_SEND_FILE: /absolute/path/to/file"));
   assert.equal(channel.sentMedia.length, 1);
   assert.equal(channel.sentMedia[0].media.path, imagePath);
   assert.equal(channel.sentMedia[0].media.mimeType, "image/png");
   assert.equal(transcript.outboundMediaEvents.length, 1);
   assert.equal(transcript.outboundMediaEvents[0].media.path, imagePath);
+  assert.ok(channel.sentMessages.some((message) => message.text === "文件已准备好。"));
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("BRIDGE_SEND_FILE")), false);
+});
+
+test("Bridge aggregates /sendfile media failures without per-file fallback spam", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-sendfile-fail-test-"));
+  const imagePath = path.join(root, "result.png");
+  fs.writeFileSync(imagePath, "png");
+  const channel = new FailingMediaChannelAdapter();
+  const codex = new SendFileCodexAdapter(imagePath);
+  const bridge = new Bridge({ channel, codex, cwd: root });
+
+  await bridge.start();
+  await channel.emitText("/sendfile 生成结果图并发给我");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.equal(channel.mediaAttempts, 1);
+  const resultMessages = channel.sentMessages.filter((message) => message.text.startsWith("文件发送结果"));
+  assert.equal(resultMessages.length, 1);
+  assert.ok(resultMessages[0].text.includes("有 1 个文件发送失败"));
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("Codex 生成了媒体文件")), false);
 });
 
 test("Bridge default progress mode suppresses command details but keeps reasoning progress", async () => {

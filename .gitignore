@@ -25,10 +25,12 @@ logs/
 weixin-state/
 
 # Local reference package downloads and extracts
+openclaw-feishu-npm/
 openclaw-weixin-npm/
 
 # Large nested reference repositories are kept locally, not committed.
 references/openai-codex/
+references/openclaw/
 
 # Temporary files
 tmp/

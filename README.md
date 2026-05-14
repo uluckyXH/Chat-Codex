@@ -9,6 +9,6 @@ This repository contains a lightweight middleware for connecting Codex to chat c
 
 Runtime boundary: this project does not depend on OpenClaw CLI, OpenClaw gateway, OpenClaw host runtime, or OpenClaw channel runtime.
 
-Reference source checkout instructions live under [references/](references/). The `openclaw-weixin-npm/` package download/extract directory is local-only and is not committed.
+Reference source checkout instructions live under [references/](references/). Local package download/extract directories such as `openclaw-weixin-npm/` and `openclaw-feishu-npm/` are not committed.
 
 License: [MIT](LICENSE). Authors: 小黄 and Codex.

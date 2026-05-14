@@ -8,13 +8,14 @@ This project is OpenClaw-free at runtime. It must not depend on OpenClaw CLI, Op
 
 - Node.js + TypeScript project scaffold is in place.
 - The `@tencent-weixin/openclaw-weixin` source reference download/extract instructions live under `references/openclaw-weixin/`; local `openclaw-weixin-npm/` contents are temporary reference files and are not committed.
+- The `@openclaw/feishu` official Feishu/Lark channel plugin source reference lives under `references/feishu/`; local `openclaw-feishu-npm/` and `references/openclaw/` contents are reference files and are not committed.
 - A generic `ChannelAdapter` protocol is implemented so future channels can reuse the same bridge core.
 - Mock, Terminal, and Weixin channel adapters are implemented.
 - Bridge Core, command routing, approval management, memory state, and baseline logging are implemented.
 - The default `codex app-server` adapter is implemented. It uses stdio JSON-RPC to create/resume threads, start turns, and route command/file/permissions approval requests to Weixin `/OK` and `/NO [reason]`.
 - The `codex exec --json` adapter is still available as a fallback mode and has been verified through the terminal channel with the real Codex CLI.
 - Weixin QR login, local account token persistence, text send, and basic `getupdates` polling support are implemented.
-- Codex image forwarding is implemented. The bridge detects local image paths, `file://` paths, Markdown images, and remote image URLs in progress/final output; Weixin uploads and sends images, while channels without media support fall back to a text reference.
+- Explicit file delivery is implemented. Paths in ordinary replies and progress are treated as text; use `/sendfile <task>` when Codex should generate and send final files for that turn.
 - The `weixin codex` startup entry checks Codex availability and Weixin login state. It skips QR login when credentials are valid and starts QR login when credentials are missing.
 - The `weixin codex` daemon terminal prints inbound Weixin messages, outbound Codex replies, progress updates, and media sends in a colored chat-style transcript so the running conversation can be observed locally. Non-TTY output stays plain text by default.
 - History session lists prefer Codex SQLite titles or first user messages, then fall back to `session_index.jsonl` and rollout metadata.
@@ -53,7 +54,7 @@ Normal messages from the same channel context are processed sequentially. If Cod
 
 Weixin outbound messages are serialized with a small interval to reduce dropped or hidden rapid-fire progress messages. The default send interval is 1200ms. If `sendmessage` hits rate limiting or a temporary failure, the adapter retries with backoff; only the final failure moves the channel to `degraded` and records `lastError`, instead of logging the request as a successful OUT. While Codex is running, the Weixin channel fetches a `typing_ticket` with `getconfig`, then periodically calls `sendtyping` to keep the peer-side "typing" state visible; it stops typing when the task finishes or `/stop` is used.
 
-When Codex output contains an accessible media reference, the bridge sends the text first and then attempts a media message. Images are detected from common image suffixes. Regular files are extracted only from local Markdown file links that exist, or from explicit references such as `MEDIA:`/`FILE:` directives and `File:`/`Attachment:` labels, so ordinary web links and code paths are not sent as attachments. Remote regular files must use an explicit label and a recognizable file suffix. Local files must exist. Weixin sends images as `image_item` and regular files as `file_item`; both use `getuploadurl` plus CDN upload. Unsupported channels or failed media sends get a text fallback with the file location.
+Ordinary messages and progress output never auto-send files or images. Local paths, Markdown images, and `file://` references are left as plain text unless the user starts the turn with `/sendfile <task>`. For that turn, the bridge adds an internal instruction to Codex and only parses final-answer lines using `BRIDGE_SEND_FILE: /absolute/path/to/file`. Up to 3 files are sent per turn, and the protocol lines are hidden from the visible reply. Media failures are reported in one aggregate result instead of one fallback message per file.
 
 ## Weixin Login State
 
@@ -70,6 +71,7 @@ To invalidate Weixin login, stop the middleware and delete the whole `state/weix
 - `/sessions all` or `/all-sessions`: list all discoverable Codex history session IDs.
 - `/resume <session>` / `/use <session>`: resume and bind a Codex session.
 - `/progress [brief|detailed|silent]`: show or set progress delivery mode for the current channel context.
+- `/sendfile <task>`: let Codex declare final files for this turn through the internal bridge protocol; ordinary messages do not auto-send files.
 - `/permission [approval|full confirm]`: show or switch the permission mode for the currently bound Codex session; without a bound session it changes the default for future new sessions.
 - `/OK`: approve the current Codex approval.
 - `/NO [reason]`: deny the current Codex approval and record the reason.
@@ -93,5 +95,6 @@ Authors: 小黄 and Codex
 ## References
 
 - [references/README.md](references/README.md): reference source index.
+- [references/feishu/README.md](references/feishu/README.md): `@openclaw/feishu` download, extraction, official source checkout, and key source paths.
 - [references/openclaw-weixin/README.md](references/openclaw-weixin/README.md): `@tencent-weixin/openclaw-weixin` download, extraction, and key source paths.
 - `references/openai-codex/`: local shallow clone of the official Codex repository, recreated from `references/README.md` and not committed.

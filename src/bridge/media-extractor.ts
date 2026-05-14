@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelMedia } from "../protocol/channel.js";
 
+export const BRIDGE_SEND_FILE_PREFIX = "BRIDGE_SEND_FILE:";
+
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"]);
 const EXTENSION_MIME: Record<string, string> = {
   ".png": "image/png",
@@ -44,6 +46,13 @@ interface MediaCandidate {
   markdownLink?: boolean;
 }
 
+export interface BridgeSendFileExtraction {
+  requestedCount: number;
+  media: ChannelMedia[];
+  invalidRefs: string[];
+  overflowCount: number;
+}
+
 export function extractMediaRefs(text: string, cwd = process.cwd()): ChannelMedia[] {
   const candidates = [
     ...markdownMediaRefs(text),
@@ -68,6 +77,49 @@ export function extractLocalImageMedia(text: string, cwd: string): ChannelMedia[
   return extractMediaRefs(text, cwd).filter((media) => media.type === "image" && Boolean(media.path));
 }
 
+export function extractBridgeSendFileRefs(text: string, cwd: string, maxFiles: number): BridgeSendFileExtraction {
+  const refs = bridgeSendFileRefs(text);
+  const media: ChannelMedia[] = [];
+  const invalidRefs: string[] = [];
+  let overflowCount = 0;
+  const seen = new Set<string>();
+
+  for (const ref of refs) {
+    if (media.length >= maxFiles) {
+      overflowCount += 1;
+      continue;
+    }
+    if (!path.isAbsolute(ref)) {
+      invalidRefs.push(ref);
+      continue;
+    }
+    const item = mediaFromCandidate({ value: ref, explicit: true }, cwd);
+    if (!item?.path || !path.isAbsolute(item.path)) {
+      invalidRefs.push(ref);
+      continue;
+    }
+    if (seen.has(item.path)) continue;
+    seen.add(item.path);
+    media.push(item);
+  }
+
+  return {
+    requestedCount: refs.length,
+    media,
+    invalidRefs,
+    overflowCount,
+  };
+}
+
+export function stripBridgeSendFileRefs(text: string): string {
+  const pattern = new RegExp(`^${BRIDGE_SEND_FILE_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !pattern.test(line.trimStart()))
+    .join("\n")
+    .trim();
+}
+
 function markdownMediaRefs(text: string): MediaCandidate[] {
   const refs: MediaCandidate[] = [];
   const pattern = /(!?)\[([^\]]*)]\(\s*(<[^>]+>|[^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/g;
@@ -81,6 +133,17 @@ function markdownMediaRefs(text: string): MediaCandidate[] {
       explicit: isImage,
       markdownLink: !isImage,
     });
+  }
+  return refs;
+}
+
+function bridgeSendFileRefs(text: string): string[] {
+  const refs: string[] = [];
+  const pattern = /^\s*BRIDGE_SEND_FILE:\s*(.+?)\s*$/gim;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const cleaned = cleanRef(match[1]);
+    if (cleaned) refs.push(cleaned);
   }
   return refs;
 }

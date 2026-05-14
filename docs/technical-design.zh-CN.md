@@ -967,7 +967,7 @@ CLI JSONL adapter 可用事件：
 - `turn.started`：Bridge 发送简短“Codex 正在处理这条消息”提示，不在每次任务开始时重复刷 Session ID。
 - `item.completed` + `reasoning`：发送 `Codex 进度`，内容为 Codex 提供的 reasoning summary；兼容 `summary`、`summary_text`、顶层 `codex_thinking` 等不同 JSONL 形态。
 - `item.updated` + `plan_update`：发送计划更新，归类为 brief 模式可见的自言自语/计划进度。
-- `item.started/completed` + `command_execution`：发送命令开始或完成摘要；当 `aggregated_output` 中出现图片路径/URL 后缀时，把相关输出片段带入进度文本，交给 Bridge 的媒体抽取逻辑处理。
+- `item.started/completed` + `command_execution`：发送命令开始或完成摘要；命令输出中的图片或文件路径只作为进度文本，不触发媒体发送。
 - `item.completed` + `file_change`：发送文件变更摘要。
 - `mcp_tool_call`、`web_search`、`todo_list`：发送工具、搜索或计划摘要。
 
@@ -975,7 +975,7 @@ Bridge 会把进度事件标记为 `reasoning`、`todo`、`search`、`file_chang
 
 - `brief`：默认模式，只投递计划/自言自语、搜索和文件变更摘要，不投递命令/工具细节。
 - `detailed`：调试模式，投递全部可见进度，包括命令开始/完成和工具调用。
-- `silent`：安静模式，不投递进度文本；开始处理、审批、最终回复和媒体仍会发送。
+- `silent`：安静模式，不投递进度文本；开始处理、审批和最终回复仍会发送。文件发送只由 `/sendfile` 单次授权触发，不归 progress 模式控制。
 
 用户可通过 `/progress [brief|detailed|silent]` 为当前 route 调整模式；CLI 可通过 `--progress brief|detailed|silent` 设置默认模式。
 
@@ -1011,7 +1011,7 @@ app-server adapter 可用事件：
 - 文件变更默认发送文件列表摘要，不直接发送完整 diff。
 - turn 完成后发送最终结果，并标记为“完成”。
 - turn 失败或中断时发送明确状态。
-- 图片和显式文件引用会跟随阶段性输出和最终回复被抽取；文本先发送，媒体后发送。图片会自动识别常见图片后缀，普通文件需要本地存在的 Markdown 文件链接，或 `FILE:`、`文件:` 等显式标记；普通远程网页链接不会被当成文件附件。若微信媒体上传失败，会退回一条包含路径/URL、类型和 MIME 信息的文本说明。
+- 普通消息、阶段性输出和最终回复里的路径默认只当文本，不自动发送媒体。用户发送 `/sendfile <任务内容>` 时，Bridge 会给该 turn 追加内部协议提示，只在最终回复中解析 `BRIDGE_SEND_FILE: /absolute/path/to/file`，每轮最多发送 3 个文件，并从用户可见最终文本中移除协议行。若媒体上传失败，只发送一条聚合失败摘要，不逐个文件刷 fallback 文本。
 - Codex 运行期间启用微信 typing：`getconfig` 获取 ticket，`sendtyping` 周期续发；turn 完成、失败或 `/stop` 后停止 typing。
 - `WeixinAdapter` 出站发送采用单队列串行和最小发送间隔，降低连续进度消息在微信侧丢显或乱序的概率。
 - `sendmessage`、`getuploadurl` 的 HTTP 200 不直接视为成功；若 JSON 里 `ret/errcode` 非 0，会抛错并更新通道 `lastError`，避免终端 transcript 把失败请求打印成成功 OUT。

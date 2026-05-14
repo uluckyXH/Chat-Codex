@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { extractMediaRefs } from "../../src/bridge/media-extractor.js";
+import { extractBridgeSendFileRefs, extractMediaRefs, stripBridgeSendFileRefs } from "../../src/bridge/media-extractor.js";
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "media-extractor-test-"));
@@ -95,4 +95,44 @@ test("extractMediaRefs extracts explicit file attachments without treating bare 
     { type: "file", path: reportPath, mimeType: "application/pdf", caption: "最终报告" },
     { type: "file", path: dataPath, mimeType: "application/json", caption: undefined },
   ]);
+});
+
+test("extractBridgeSendFileRefs only extracts explicit bridge send-file markers", () => {
+  const root = tempDir();
+  const first = path.join(root, "first.png");
+  const second = path.join(root, "second.pdf");
+  fs.writeFileSync(first, "png");
+  fs.writeFileSync(second, "pdf");
+
+  const text = [
+    `普通路径不算发送请求: ${first}`,
+    `BRIDGE_SEND_FILE: ${first}`,
+    `bridge_send_file: ${second}`,
+    "BRIDGE_SEND_FILE: ./relative.png",
+    "BRIDGE_SEND_FILE: /missing/file.png",
+  ].join("\n");
+
+  const extraction = extractBridgeSendFileRefs(text, root, 3);
+
+  assert.equal(extraction.requestedCount, 4);
+  assert.deepEqual(extraction.media.map((item) => item.path), [first, second]);
+  assert.equal(extraction.invalidRefs.length, 2);
+});
+
+test("extractBridgeSendFileRefs caps requested files and strips protocol lines", () => {
+  const root = tempDir();
+  const files = ["one.png", "two.png", "three.png", "four.png"].map((name) => path.join(root, name));
+  for (const file of files) fs.writeFileSync(file, "png");
+
+  const text = [
+    "文件如下：",
+    ...files.map((file) => `BRIDGE_SEND_FILE: ${file}`),
+    "已完成。",
+  ].join("\n");
+
+  const extraction = extractBridgeSendFileRefs(text, root, 3);
+
+  assert.equal(extraction.media.length, 3);
+  assert.equal(extraction.overflowCount, 1);
+  assert.equal(stripBridgeSendFileRefs(text), "文件如下：\n已完成。");
 });
