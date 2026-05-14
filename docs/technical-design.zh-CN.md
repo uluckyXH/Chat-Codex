@@ -541,7 +541,7 @@ src/channels/<channel-id>/
 - 已实现从 `$CODEX_HOME/state_5.sqlite`、`$CODEX_HOME/session_index.jsonl` 和 `$CODEX_HOME/sessions/**/*.jsonl` 发现历史会话，并优先展示 Codex 保存的标题或首条用户消息。
 - 已实现 `terminal codex` 启动时先选会话、再选权限模式，并在启动摘要里显示本次会话、工作目录、权限和进度模式。
 - 已用中间件真实调用 `codex exec --json` 并收到回复。
-- `weixin codex` 启动入口已启用运行期 transcript：Bridge 收到微信消息、向微信发送回复或媒体时，会以聊天记录样式同步打印到启动中间件的终端。
+- `weixin codex` 启动入口已启用运行期 transcript：Bridge 收到微信消息、向微信发送回复、进度或媒体时，会以彩色聊天记录样式同步打印到启动中间件的终端；默认非 TTY 输出保持纯文本，方便重定向日志。
 - 已把 `codex exec --json` 中可见的 reasoning summary、命令、工具、文件变更等事件转换为微信进度消息。
 
 限制：
@@ -974,7 +974,8 @@ app-server adapter 可用事件：
 - Codex 运行期间启用微信 typing：`getconfig` 获取 ticket，`sendtyping` 周期续发；turn 完成、失败或 `/stop` 后停止 typing。
 - `WeixinAdapter` 出站发送采用单队列串行和最小发送间隔，降低连续进度消息在微信侧丢显或乱序的概率。
 - `sendmessage`、`getuploadurl` 的 HTTP 200 不直接视为成功；若 JSON 里 `ret/errcode` 非 0，会抛错并更新通道 `lastError`，避免终端 transcript 把失败请求打印成成功 OUT。
-- 终端 transcript 默认使用一行方向摘要加缩进消息体，例如 `微信 <= Alice | direct:...` 和 `微信 => direct:... | 进度`；完整 route/sender 只在 verbose 模式下展示。
+- 终端 transcript 默认使用一行方向摘要加缩进消息体，例如 `微信 <= Alice | direct:...` 和 `微信 => direct:... | 进度`；TTY 下用颜色区分用户入站、Codex 回复、进度、审批、错误和媒体，完整 route/sender 只在 verbose 模式下展示。
+- WeixinAdapter 对 `sendmessage` 串行排队，默认最小发送间隔为 1200ms；遇到 45009 等限流错误、429/5xx 或临时网络错误时按退避重试，最终失败才更新通道 `state=degraded` 和 `lastError`。
 
 ### 8.2.3 用户可见模式
 

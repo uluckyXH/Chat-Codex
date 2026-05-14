@@ -87,6 +87,7 @@ test("WeixinAdapter sends text messages with stored token and context token", as
     store,
     pollOnStart: false,
     outboundMinIntervalMs: 0,
+    outboundMaxRetries: 0,
     apiOptions: { fetch: fetchImpl },
   });
 
@@ -129,6 +130,7 @@ test("WeixinAdapter treats sendmessage errcode as delivery failure", async () =>
     store,
     pollOnStart: false,
     outboundMinIntervalMs: 0,
+    outboundMaxRetries: 0,
     apiOptions: { fetch: fetchImpl },
   });
 
@@ -142,6 +144,50 @@ test("WeixinAdapter treats sendmessage errcode as delivery failure", async () =>
   const status = await adapter.getStatus();
   assert.equal(status.state, "degraded");
   assert.match(status.lastError ?? "", /45009/);
+});
+
+test("WeixinAdapter retries rate-limited sendmessage and succeeds", async () => {
+  const store = new FileWeixinAccountStore(tempStateDir());
+  store.saveAccount({
+    accountId: "abc-im-bot",
+    token: "token-1",
+    baseUrl: "https://api.example",
+    savedAt: new Date().toISOString(),
+  });
+  let sendAttempts = 0;
+  const fetchImpl: FetchLike = async (input) => {
+    const url = String(input);
+    if (url.includes("sendmessage")) {
+      sendAttempts += 1;
+      if (sendAttempts === 1) {
+        return jsonResponse({ ret: 0, errcode: 45009, errmsg: "rate limited" });
+      }
+      return jsonResponse({});
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const adapter = new WeixinAdapter({
+    baseUrl: "https://api.example",
+    store,
+    pollOnStart: false,
+    outboundMinIntervalMs: 0,
+    outboundMaxRetries: 1,
+    outboundRetryBaseDelayMs: 0,
+    apiOptions: { fetch: fetchImpl },
+  });
+
+  await adapter.sendText({
+    channelId: "weixin",
+    routeKey: "weixin:abc-im-bot:direct:user@im.wechat",
+    accountId: "abc-im-bot",
+    conversation: { id: "user@im.wechat", kind: "direct" },
+    recipient: { id: "user@im.wechat" },
+  }, "hello after retry");
+
+  assert.equal(sendAttempts, 2);
+  const status = await adapter.getStatus();
+  assert.equal(status.state, "connected");
+  assert.equal(status.lastError, undefined);
 });
 
 test("WeixinAdapter sends typing state with getconfig typing ticket", async () => {

@@ -15,7 +15,7 @@
 - 已实现微信二维码登录入口、账号凭证本地保存、文本发送和 `getupdates` 轮询基础能力。
 - 已实现 Codex 输出图片转发：会从阶段性输出和最终回复里识别本地图片路径、`file://`、Markdown 图片和远程图片 URL；微信通道会上传图片后发送，其他不支持媒体的通道会退回文本路径说明。
 - `weixin codex` 启动时会检查 Codex 可用性和微信登录态；已登录会跳过二维码，未登录会进入扫码登录。
-- `weixin codex` 常驻终端会用聊天记录样式打印微信入站消息、发回微信的 Codex 回复和媒体发送记录，方便运行时观察对话流。
+- `weixin codex` 常驻终端会用彩色聊天记录样式打印微信入站消息、发回微信的 Codex 回复、阶段性进度和媒体发送记录，方便运行时观察对话流；默认非 TTY 输出会保持纯文本。
 - 历史会话列表会优先读取 Codex SQLite 状态里的标题或首条用户消息，读不到再回退到 `session_index.jsonl` 和 rollout 元数据。
 
 ## 常用命令
@@ -49,7 +49,7 @@ npm run cli:weixin:codex -- --session last --permission approval --progress brie
 
 同一个微信上下文中的普通消息会按顺序排队处理。Codex 正在工作时再发送普通消息，中间件会先回复排队提示；命令类消息如 `/status`、`/stop`、审批命令仍会立即处理。每条任务开始时只发送简短的“正在处理”提示，不重复刷 Session ID；需要查看会话和权限细节时使用 `/status`。当前 exec 模式的“中途输出”来自 `codex exec --json` 可见事件。默认 `brief` 进度模式只投递计划、自言自语、搜索和文件变更摘要，不投递命令/工具细节；需要完整调试信息时可发送 `/progress detailed` 或启动时传 `--progress detailed`。更细的同 turn 插入和 steering 需要后续 app-server adapter。
 
-微信出站消息会串行排队并做轻量间隔，避免连续进度消息过快导致微信侧丢显。Codex 运行期间，微信通道会通过 `getconfig` 获取 `typing_ticket`，再周期调用 `sendtyping` 维持“对方正在输入中”状态，结束或 `/stop` 后会停止 typing。`sendmessage` 返回业务错误码时会进入 `degraded` 状态并记录 `lastError`，不会再把这类请求误记为成功 OUT。
+微信出站消息会串行排队并做轻量间隔，避免连续进度消息过快导致微信侧丢显。默认发送间隔为 1200ms；遇到 `sendmessage` 限流或临时失败时会做退避重试，仍失败才进入 `degraded` 状态并记录 `lastError`，不会再把这类请求误记为成功 OUT。Codex 运行期间，微信通道会通过 `getconfig` 获取 `typing_ticket`，再周期调用 `sendtyping` 维持“对方正在输入中”状态，结束或 `/stop` 后会停止 typing。
 
 当 Codex 回复中出现可访问的媒体引用时，中间件会在发送文本后尝试发送媒体消息。图片会识别常见图片后缀；普通文件只从显式引用中提取，例如 Markdown 链接、`MEDIA:`/`FILE:` 指令、`文件:`/`File:` 标签，避免把进度里的代码路径都当附件发送。本地文件必须存在。微信发送图片使用 `image_item`，发送普通文件使用 `file_item`，底层都会走 `getuploadurl` + CDN 上传；如果通道不支持媒体或发送失败，会额外发送一条包含文件位置的文本说明。
 

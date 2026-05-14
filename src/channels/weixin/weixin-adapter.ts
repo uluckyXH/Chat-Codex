@@ -47,6 +47,8 @@ export interface WeixinAdapterOptions {
   loginTimeoutMs?: number;
   loginPollIntervalMs?: number;
   outboundMinIntervalMs?: number;
+  outboundMaxRetries?: number;
+  outboundRetryBaseDelayMs?: number;
 }
 
 export interface WeixinLoginStartResult extends ChannelLoginResult {
@@ -71,6 +73,9 @@ const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
 const SESSION_EXPIRED_ERRCODE = -14;
 const TYPING_TICKET_TTL_MS = 20 * 60 * 1000;
+const DEFAULT_OUTBOUND_MIN_INTERVAL_MS = 1200;
+const DEFAULT_OUTBOUND_MAX_RETRIES = 2;
+const DEFAULT_OUTBOUND_RETRY_BASE_DELAY_MS = 1500;
 
 export class WeixinAdapter implements ChannelAdapter {
   readonly id = "weixin";
@@ -88,6 +93,8 @@ export class WeixinAdapter implements ChannelAdapter {
   private readonly loginTimeoutMs: number;
   private readonly loginPollIntervalMs: number;
   private readonly outboundMinIntervalMs: number;
+  private readonly outboundMaxRetries: number;
+  private readonly outboundRetryBaseDelayMs: number;
   private handler?: ChannelMessageHandler;
   private status: ChannelStatus;
   private activeLogin?: ActiveLogin;
@@ -114,7 +121,9 @@ export class WeixinAdapter implements ChannelAdapter {
     this.longPollTimeoutMs = options.longPollTimeoutMs ?? 35_000;
     this.loginTimeoutMs = options.loginTimeoutMs ?? 480_000;
     this.loginPollIntervalMs = options.loginPollIntervalMs ?? 1000;
-    this.outboundMinIntervalMs = options.outboundMinIntervalMs ?? 600;
+    this.outboundMinIntervalMs = options.outboundMinIntervalMs ?? DEFAULT_OUTBOUND_MIN_INTERVAL_MS;
+    this.outboundMaxRetries = options.outboundMaxRetries ?? DEFAULT_OUTBOUND_MAX_RETRIES;
+    this.outboundRetryBaseDelayMs = options.outboundRetryBaseDelayMs ?? DEFAULT_OUTBOUND_RETRY_BASE_DELAY_MS;
     this.status = {
       channelId: this.id,
       state: "login_required",
@@ -535,7 +544,7 @@ export class WeixinAdapter implements ChannelAdapter {
   private async sendRawMessage(account: StoredWeixinAccount, body: WeixinSendMessageRequest): Promise<void> {
     try {
       await this.enqueueOutbound(async () => {
-        await this.api.sendMessage({ token: account.token, body });
+        await this.sendMessageWithRetry(account, body);
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -546,6 +555,31 @@ export class WeixinAdapter implements ChannelAdapter {
         lastError: message,
       };
       throw error;
+    }
+  }
+
+  private async sendMessageWithRetry(account: StoredWeixinAccount, body: WeixinSendMessageRequest): Promise<void> {
+    let attempt = 0;
+    while (true) {
+      try {
+        await this.api.sendMessage({ token: account.token, body });
+        return;
+      } catch (error) {
+        if (attempt >= this.outboundMaxRetries || !isRetryableSendMessageError(error)) {
+          throw error;
+        }
+        const delayMs = retryDelayMs(this.outboundRetryBaseDelayMs, attempt);
+        const message = error instanceof Error ? error.message : String(error);
+        this.status = {
+          ...this.status,
+          state: "degraded",
+          account: account.accountId,
+          lastError: `sendmessage retry ${attempt + 1}/${this.outboundMaxRetries} after ${delayMs}ms: ${message}`,
+          details: this.statusDetails("sendmessage-retry"),
+        };
+        attempt += 1;
+        if (delayMs > 0) await sleep(delayMs);
+      }
     }
   }
 
@@ -574,8 +608,22 @@ export class WeixinAdapter implements ChannelAdapter {
       sourceVersion: this.sourceVersion,
       phase,
       runtime: "codex-wechat-middleware",
+      outboundMinIntervalMs: this.outboundMinIntervalMs,
+      outboundMaxRetries: this.outboundMaxRetries,
     };
   }
+}
+
+function isRetryableSendMessageError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /errcode=(45009|45011|45047|45048)\b/.test(message)
+    || /\b(429|500|502|503|504)\b/.test(message)
+    || /rate.?limit|too many|timeout|timed out|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message);
+}
+
+function retryDelayMs(baseDelayMs: number, attempt: number): number {
+  if (baseDelayMs <= 0) return 0;
+  return baseDelayMs * (2 ** attempt);
 }
 
 export function weixinMessageToChannelMessage(accountId: string, raw: WeixinMessage): ChannelMessage {
