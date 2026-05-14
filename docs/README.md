@@ -57,8 +57,7 @@ Codex <-> Middleware Core <-> WeixinAdapter <-> openclaw-weixin extracted commun
 2. 读 `technical-design.zh-CN.md`，确认架构和分阶段路线。
 3. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
 4. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
-5. 需要 Codex 协议细节时，查 `../references/openai-codex/`。
-6. 需要微信通道细节时，查 `../openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3/`。
+5. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
 
 ## 分阶段工作顺序
 

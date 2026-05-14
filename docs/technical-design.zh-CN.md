@@ -27,7 +27,7 @@
 
 ## 2. 已知依据
 
-本地已归档 `@tencent-weixin/openclaw-weixin@2.4.3`：
+微信通道参考 `@tencent-weixin/openclaw-weixin@2.4.3` npm 包。该包通过 `references/README.md` 中的命令按需下载和解包，不提交到仓库：
 
 - `openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.3.tgz`
 - `openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3/`
@@ -51,7 +51,7 @@ Codex 侧调研结论：
 - 本机 Codex CLI 提供 `codex remote-control`，但它是实验能力，不作为第一阶段默认方案。
 - OpenAI 官方 Codex SDK 支持在应用内控制本地 Codex agent，更适合中长期集成。
 
-本地已拉取 OpenAI Codex 官方开源仓库作为参考：
+OpenAI Codex 官方开源仓库只作为协议参考，按需通过 `references/README.md` 拉取，不提交：
 
 - 路径：`references/openai-codex/`
 - 远端：`https://github.com/openai/codex.git`
@@ -1069,4 +1069,4 @@ app-server adapter 可用事件：
 - OpenAI Codex App Server: https://developers.openai.com/codex/app-server
 - OpenAI Codex MCP: https://developers.openai.com/codex/mcp
 - OpenAI Codex Remote connections: https://developers.openai.com/codex/remote-connections
-- 本地归档包：`openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3/`
+- 本地参考源码获取说明：`references/README.md`

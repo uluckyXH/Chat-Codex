@@ -27,8 +27,9 @@ weixin-state/
 # Local reference package downloads and extracts
 openclaw-weixin-npm/
 
-# Large nested reference repositories are kept locally, not committed.
-references/openai-codex/
+# Local reference source checkouts are kept locally, not committed.
+references/*
+!references/README.md
 
 # Temporary files
 tmp/

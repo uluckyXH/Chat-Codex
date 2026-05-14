@@ -148,8 +148,8 @@ npm test
 检查重点：
 
 - 不能暂存 `node_modules/`、`dist/`、登录态、token、cookie、日志和运行态状态。
-- 不能提交 `references/openai-codex/`。
-- 不能提交 `openclaw-weixin-npm/extracted/`。
+- 不能提交 `references/` 下除 `README.md` 外的本地参考源码。
+- 不能提交 `openclaw-weixin-npm/`。
 - 新功能必须有测试或明确说明为什么只能等用户登录微信后补测。
 - 新功能必须更新或新增 `reports/tests/` 下的中文测试报告。
 

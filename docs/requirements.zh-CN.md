@@ -52,12 +52,12 @@ Codex <-> Codex Adapter <-> Middleware Core <-> Weixin Adapter <-> WeChat
 - `WeixinAdapter` 真实扫码登录和真实微信收发仍需用户后续协助测试。
 - 本地单元测试、集成测试和中文测试报告。
 
-已经本地保存的 `openclaw-weixin` 微信通讯 npm 包：
+`openclaw-weixin` 微信通讯 npm 包作为本地参考源码使用，不提交到仓库。获取方式见 `references/README.md`：
 
 - `openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.3.tgz`
 - `openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3/`
 
-已经本地保存的 Codex 源码参考仓库：
+Codex 源码参考仓库只在需要核对 app-server、exec JSONL 或审批协议时按 `references/README.md` 拉取，不提交：
 
 - `references/openai-codex/`
 

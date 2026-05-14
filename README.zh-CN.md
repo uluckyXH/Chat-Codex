@@ -7,7 +7,7 @@
 ## 当前状态
 
 - 已建立 Node.js + TypeScript 项目骨架。
-- 已把 `@tencent-weixin/openclaw-weixin` 源码参考的下载与解包说明放到 `references/openclaw-weixin/`；本地 `openclaw-weixin-npm/` 仅作临时参考目录，不提交。
+- 已把 `@tencent-weixin/openclaw-weixin` 源码参考的下载与解包说明放到 `references/README.md`；本地 `openclaw-weixin-npm/` 仅作临时参考目录，不提交。
 - 已建立通用 `ChannelAdapter` 协议，后续其他渠道可按同一协议接入。
 - 已实现 Mock、Terminal、Weixin 三类通道适配器。
 - 已实现 Bridge Core、命令路由、审批管理、内存状态和基础日志。
@@ -92,6 +92,6 @@ npm run cli:weixin:codex -- --session last --permission approval --progress brie
 
 ## 参考文件
 
-- [references/README.md](references/README.md)：参考源码索引。
-- [references/openclaw-weixin/README.md](references/openclaw-weixin/README.md)：`@tencent-weixin/openclaw-weixin` 下载、解包和关键源码路径。
-- `references/openai-codex/`：Codex 官方仓库本地 shallow clone，按 `references/README.md` 拉取，不提交。
+- [references/README.md](references/README.md)：参考源码索引，包含微信插件 npm 包和 Codex 协议参考仓库的拉取方式。
+- `openclaw-weixin-npm/`：本地临时下载和解包目录，不提交。
+- `references/openai-codex/`：Codex 官方仓库本地 shallow clone，仅在需要查协议时按 `references/README.md` 拉取，不提交。
