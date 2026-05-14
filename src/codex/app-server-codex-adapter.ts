@@ -9,6 +9,8 @@ import type {
   CodexProgressKind,
   CodexRunPolicyStatus,
   CodexSession,
+  CodexSessionBaseStatus,
+  CodexSessionContextUsage,
   CodexSessionStatus,
   CodexSessionSummary,
   StartSessionInput,
@@ -68,6 +70,7 @@ interface TurnQueueRecord {
   queue: AsyncEventQueue<CodexEvent>;
   finalText: string;
   progressDrafts: Map<string, ProgressDraft>;
+  agentMessagePhases: Map<string, "commentary" | "final_answer">;
   emittedProgressItemIds: Set<string>;
   emittedProgress: Set<string>;
   closed: boolean;
@@ -207,6 +210,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       queue,
       finalText: "",
       progressDrafts: new Map(),
+      agentMessagePhases: new Map(),
       emittedProgressItemIds: new Set(),
       emittedProgress: new Set(),
       closed: false,
@@ -215,7 +219,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       queue.push(event);
     }
     this.earlyTurnEvents.delete(turnId);
-    stored.status = { type: "running", turnId, task: truncatePrompt(prompt) };
+    stored.status = withContext(stored, { type: "running", turnId, task: truncatePrompt(prompt) });
     stored.currentTurnId = turnId;
     stored.updatedAt = new Date().toISOString();
     yield { type: "turn.started", sessionId, turnId };
@@ -229,7 +233,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const stored = this.sessions.get(sessionId);
     const turnId = stored?.currentTurnId;
     if (!stored || !turnId) return;
-    stored.status = { type: "idle" };
+    stored.status = withContext(stored, { type: "idle" });
     stored.updatedAt = new Date().toISOString();
     const pendingForTurn = [...this.pendingApprovals.entries()]
       .filter(([, pending]) => pending.sessionId === sessionId && pending.turnId === turnId);
@@ -474,7 +478,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const turn = this.turnQueues.get(turnId);
     const stored = this.sessions.get(sessionId);
     if (stored) {
-      stored.status = { type: "waiting_approval", detail: approval.reason ?? approval.kind };
+      stored.status = withContext(stored, { type: "waiting_approval", detail: approval.reason ?? approval.kind });
       stored.updatedAt = new Date().toISOString();
     }
     const pending: PendingServerApproval = {
@@ -490,7 +494,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
         });
         const current = this.sessions.get(sessionId);
         if (current) {
-          current.status = { type: "running", turnId };
+          current.status = withContext(current, { type: "running", turnId });
           current.updatedAt = new Date().toISOString();
         }
       },
@@ -539,15 +543,32 @@ export class AppServerCodexAdapter implements CodexAdapter {
     if (notification.method === "turn/started") {
       const stored = this.sessions.get(sessionId);
       if (stored) {
-        stored.status = { type: "running", turnId };
+        stored.status = withContext(stored, { type: "running", turnId });
         stored.currentTurnId = turnId;
         stored.updatedAt = new Date().toISOString();
+      }
+      return;
+    }
+    if (notification.method === "thread/tokenUsage/updated") {
+      const stored = this.sessions.get(sessionId);
+      if (stored) {
+        const context = parseTokenUsage(objectValue(params.tokenUsage));
+        if (context) {
+          stored.status = { ...stored.status, context };
+          stored.updatedAt = new Date().toISOString();
+        }
       }
       return;
     }
     if (notification.method === "item/agentMessage/delta") {
       const delta = stringValue(params.delta);
       if (!delta) return;
+      const itemId = stringValue(params.itemId);
+      const phase = itemId && turn ? turn.agentMessagePhases.get(itemId) : undefined;
+      if (turn && itemId && phase === "commentary") {
+        this.appendProgressDelta(turn, sessionId, turnId, itemId, delta, "other");
+        return;
+      }
       if (turn) turn.finalText += delta;
       this.pushTurnEvent(turnId, { type: "assistant.delta", sessionId, turnId, text: delta });
       return;
@@ -643,6 +664,11 @@ export class AppServerCodexAdapter implements CodexAdapter {
     if (itemId) this.flushProgressDraft(turn, sessionId, turnId, itemId);
     if (itemType === "agentMessage") {
       const text = stringValue(item.text);
+      const phase = messagePhaseValue(item.phase);
+      if (phase === "commentary") {
+        if (text) this.pushProgressEvent(turn, sessionId, turnId, text, "other");
+        return;
+      }
       if (text) {
         turn.finalText = text;
         turn.queue.push({ type: "assistant.completed", sessionId, turnId, text });
@@ -677,6 +703,10 @@ export class AppServerCodexAdapter implements CodexAdapter {
       this.pushProgressEvent(turn, sessionId, turnId, "正在分析...", "reasoning");
     } else if (itemType === "plan") {
       this.pushProgressEvent(turn, sessionId, turnId, "正在规划...", "todo");
+    } else if (itemType === "agentMessage") {
+      const itemId = stringValue(item.id);
+      const phase = messagePhaseValue(item.phase);
+      if (itemId && phase) turn.agentMessagePhases.set(itemId, phase);
     }
   }
 
@@ -728,7 +758,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
     turn.closed = true;
     const stored = this.sessions.get(turn.sessionId);
     if (stored) {
-      stored.status = status === "failed" && error ? { type: "failed", error } : { type: "idle" };
+      stored.status = status === "failed" && error ? withContext(stored, { type: "failed", error }) : withContext(stored, { type: "idle" });
       stored.currentTurnId = undefined;
       stored.updatedAt = new Date().toISOString();
     }
@@ -823,6 +853,43 @@ function responseForApprovalDecision(method: string, params: Record<string, unkn
     return { decision: legacyReviewDecision(decision) };
   }
   return { decision: appServerDecision(decision) };
+}
+
+function withContext(record: AppServerSessionRecord, status: CodexSessionBaseStatus): CodexSessionStatus {
+  return record.status.context ? { ...status, context: record.status.context } : status;
+}
+
+function parseTokenUsage(value: Record<string, unknown>): CodexSessionContextUsage | undefined {
+  const total = parseTokenUsageBreakdown(objectValue(value.total));
+  const last = parseTokenUsageBreakdown(objectValue(value.last));
+  if (!total || !last) return undefined;
+  return {
+    total,
+    last,
+    modelContextWindow: numberValue(value.modelContextWindow) ?? null,
+  };
+}
+
+function parseTokenUsageBreakdown(value: Record<string, unknown>): CodexSessionContextUsage["total"] | undefined {
+  const totalTokens = numberValue(value.totalTokens);
+  const inputTokens = numberValue(value.inputTokens);
+  const cachedInputTokens = numberValue(value.cachedInputTokens);
+  const outputTokens = numberValue(value.outputTokens);
+  const reasoningOutputTokens = numberValue(value.reasoningOutputTokens);
+  if (
+    totalTokens === undefined
+    || inputTokens === undefined
+    || cachedInputTokens === undefined
+    || outputTokens === undefined
+    || reasoningOutputTokens === undefined
+  ) {
+    return undefined;
+  }
+  return { totalTokens, inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens };
+}
+
+function messagePhaseValue(value: unknown): "commentary" | "final_answer" | undefined {
+  return value === "commentary" || value === "final_answer" ? value : undefined;
 }
 
 function appServerDecision(decision: ApprovalDecision): "accept" | "acceptForSession" | "decline" | "cancel" {

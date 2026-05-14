@@ -47,9 +47,9 @@ npm run cli:weixin:codex -- --session last --permission approval --progress brie
 
 交互启动时会先选择新会话或历史会话，再选择本次启动后的 Codex 权限模式，避免历史会话的上下文让权限选择不直观。如果选择新会话，会展示默认工作目录。用户输入新目录时，目录不存在会自动创建；如果选择历史会话，中间件会使用该 Codex 会话历史记录里的工作目录。
 
-默认 `codex app-server` 模式会复用 Codex 历史 thread，并由中间件作为当前微信会话的 Codex 客户端。它支持交互审批和 turn 中断，但不会把微信侧交互实时同步到另一个已经打开的 Codex CLI 或 Codex App 窗口；如需多端实时同屏，需要额外的观察端或事件订阅设计。`codex exec --json` 仍可通过 `--codex-adapter exec` 启用，用于回退和调试。
+默认 `codex app-server` 模式会复用 Codex 历史 thread，并由中间件作为当前微信会话的 Codex 客户端。它支持交互审批、turn 中断、token usage 状态更新和 commentary 阶段消息转发，但不会把微信侧交互实时同步到另一个已经打开的 Codex CLI 或 Codex App 窗口；如需多端实时同屏，需要额外的观察端或事件订阅设计。`codex exec --json` 仍可通过 `--codex-adapter exec` 启用，用于回退和调试。
 
-同一个微信上下文中的普通消息会按顺序排队处理。Codex 正在工作时再发送普通消息，中间件会先回复排队提示；命令类消息如 `/status`、`/stop`、审批命令仍会立即处理。每条任务开始时只发送简短的“正在处理”提示，不重复刷 Session ID；需要查看会话和权限细节时使用 `/status`。默认 `brief` 进度模式只投递计划、自言自语、搜索和文件变更摘要，不投递命令/工具细节；需要完整调试信息时可发送 `/progress detailed` 或启动时传 `--progress detailed`。
+同一个微信上下文中的普通消息会按顺序排队处理。Codex 正在工作时再发送普通消息，中间件会先回复排队提示；命令类消息如 `/status`、`/stop`、审批命令仍会立即处理。每条任务开始时只发送简短的“正在处理”提示，不重复刷 Session ID；需要查看会话、上下文 token 用量和权限细节时使用 `/status`。默认 `brief` 进度模式只投递计划、自言自语、搜索和文件变更摘要，不投递命令/工具细节；需要完整调试信息时可发送 `/progress detailed` 或启动时传 `--progress detailed`。
 
 微信出站消息会串行排队并做轻量间隔，避免连续进度消息过快导致微信侧丢显。默认发送间隔为 1200ms；遇到 `sendmessage` 限流或临时失败时会做退避重试，仍失败才进入 `degraded` 状态并记录 `lastError`，不会再把这类请求误记为成功 OUT。Codex 运行期间，微信通道会通过 `getconfig` 获取 `typing_ticket`，再周期调用 `sendtyping` 维持“对方正在输入中”状态，结束或 `/stop` 后会停止 typing。
 
@@ -65,7 +65,7 @@ npm run cli:weixin:codex -- --session last --permission approval --progress brie
 
 - `/help`：查看命令。
 - `/new`：为当前微信上下文创建新的 Codex 会话。
-- `/status`：查看 Bridge、微信通道、Codex 状态、是否正在处理、队列和当前工作目录。
+- `/status`：查看 Codex session、上下文 token 用量、Bridge 队列、审批、权限、进度模式和通道健康状态。
 - `/sessions`：查看当前微信上下文绑定过的会话。
 - `/sessions all` 或 `/all-sessions`：查看全部可发现 Codex 历史会话 ID。
 - `/resume <session>` / `/use <session>`：恢复并绑定指定 Codex 会话。

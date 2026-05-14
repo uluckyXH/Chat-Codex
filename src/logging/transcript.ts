@@ -121,7 +121,16 @@ function classifyOutbound(text: string): string {
   if (text.startsWith("已加入队列")) return "队列";
   if (text.startsWith("Codex 执行失败")) return "错误";
   if (text.startsWith("已请求停止")) return "停止";
-  if (text.startsWith("当前") || text.startsWith("可用命令:") || text.startsWith("Bridge:")) return "命令回复";
+  if (
+    text.startsWith("当前")
+    || text.startsWith("可用命令:")
+    || text.startsWith("Bridge:")
+    || text.startsWith("**Codex 状态**")
+    || text.startsWith("**可用命令**")
+    || text.startsWith("**进度投递**")
+    || text.startsWith("**权限模式**")
+    || text.startsWith("**当前通道身份**")
+  ) return "命令回复";
   return "回复";
 }
 

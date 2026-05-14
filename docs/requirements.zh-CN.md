@@ -344,30 +344,44 @@ Codex 状态：
 
 普通用户版示例：
 
-```text
-Bridge: ok
-Channel: weixin connected
-Processing: yes
-Codex: running turn=exec-turn-123 task=processing your last message
-Session: cdx-8f2a
-Progress mode: brief
-Cwd: codex-openclaw-wechat
-Queued messages: 0
-Pending approvals: 0
-操作: /stop 终止当前任务
+```md
+**Codex 状态**
+- Session: `cdx-8f2a`
+- State: `running turn=exec-turn-123 task=processing your last message`
+- Context: `12,345 / 200,000 tokens` (6.2%, remaining 187,655) last turn `789 tokens`
+- Cwd: `codex-openclaw-wechat`
+
+**Bridge**
+- Processing: `yes`
+- Queue: `0`
+- Pending approvals: `0`
+- Progress: `brief`
+- Permission: `approval sandbox=workspace-write`
+- Action: `/stop` 终止当前任务
+
+**Channel**
+- Adapter: `weixin`
+- State: `connected`
 ```
 
 管理员版示例：
 
-```text
-Codex: running
-Session: cdx-8f2a
-Workspace: codex-openclaw-wechat
-WeChat: connected, logged in
-Binding: group:g123 -> cdx-8f2a
-Inbound: 00:41
-Outbound: 00:40
-Last error: none
+```md
+**Codex 状态**
+- Session: `cdx-8f2a`
+- State: `running`
+- Context: `12,345 / 200,000 tokens` (6.2%, remaining 187,655) last turn `789 tokens`
+- Cwd: `codex-openclaw-wechat`
+
+**Bridge**
+- Processing: `yes`
+- Queue: `0`
+- Pending approvals: `0`
+
+**Channel**
+- Adapter: `weixin`
+- State: `connected`
+- Last error: none
 ```
 
 ## 7. 权限与安全需求

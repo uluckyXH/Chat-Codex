@@ -83,6 +83,20 @@ rl.on("line", (line) => {
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
       return;
     }
+    if (prompt.includes("token usage")) {
+      send({ method: "thread/tokenUsage/updated", params: { threadId, turnId, tokenUsage: { total: { totalTokens: 12345, inputTokens: 10000, cachedInputTokens: 4000, outputTokens: 2345, reasoningOutputTokens: 345 }, last: { totalTokens: 789, inputTokens: 600, cachedInputTokens: 200, outputTokens: 189, reasoningOutputTokens: 89 }, modelContextWindow: 200000 } } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "token usage done", phase: null, memoryCitation: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+      return;
+    }
+    if (prompt.includes("commentary message")) {
+      send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "agentMessage", id: "commentary-1", text: "", phase: "commentary", memoryCitation: null } } });
+      send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "commentary-1", delta: "我正在检查状态。" } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "commentary-1", text: "我正在检查状态。", phase: "commentary", memoryCitation: null } } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "commentary final", phase: "final_answer", memoryCitation: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+      return;
+    }
     if (prompt.includes("progress")) {
       send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "reasoning", id: "reasoning-1", summary: [], content: [] } } });
       send({ method: "item/reasoning/summaryTextDelta", params: { threadId, turnId, itemId: "reasoning-1", summaryIndex: 0, delta: "我先确认当前状态。" } });
@@ -254,6 +268,47 @@ test("AppServerCodexAdapter flushes reasoning summary sections", async () => {
   assert.ok(reasoningProgress.some((text) => text.includes("第一段分析")));
   assert.ok(reasoningProgress.some((text) => text.includes("第二段分析")));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "summary parts done"));
+});
+
+test("AppServerCodexAdapter records thread token usage updates", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+
+  for await (const _event of adapter.run(session.id, "token usage please")) {
+    // Drain the turn.
+  }
+  const status = await adapter.getStatus(session.id);
+  await adapter.stop();
+
+  assert.equal(status.type, "idle");
+  assert.equal(status.context?.total.totalTokens, 12345);
+  assert.equal(status.context?.last.totalTokens, 789);
+  assert.equal(status.context?.modelContextWindow, 200000);
+});
+
+test("AppServerCodexAdapter forwards commentary agent messages as progress", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events = [];
+
+  for await (const event of adapter.run(session.id, "commentary message please")) {
+    events.push(event);
+  }
+  await adapter.stop();
+
+  assert.ok(events.some((event) => event.type === "assistant.progress" && event.kind === "other" && event.text.includes("我正在检查状态")));
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "commentary final"));
+  assert.equal(events.some((event) => event.type === "assistant.completed" && event.text.includes("我正在检查状态")), false);
 });
 
 test("AppServerCodexAdapter reports interactive approval support", () => {

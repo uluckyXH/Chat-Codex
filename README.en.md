@@ -47,9 +47,9 @@ npm run cli:weixin:codex -- --session last --permission approval --progress brie
 
 During interactive startup, the middleware asks for the session first and then asks for the Codex permission mode for subsequent tasks. This keeps permission selection clear when resuming an older session. Choosing a new session displays the default working directory; missing directories are created automatically. If an existing session is selected, the middleware uses the working directory recorded in that Codex session history.
 
-The default `codex app-server` mode can reuse Codex history threads and acts as the Codex client for the current Weixin conversation. It supports interactive approvals and turn interruption, but it does not live-sync Weixin-side interaction into another already-open Codex CLI or Codex App window. Real-time multi-view synchronization still needs an observer UI or an event-subscription design. `codex exec --json` remains available with `--codex-adapter exec` for fallback and debugging.
+The default `codex app-server` mode can reuse Codex history threads and acts as the Codex client for the current Weixin conversation. It supports interactive approvals, turn interruption, token usage status updates, and commentary-phase message forwarding, but it does not live-sync Weixin-side interaction into another already-open Codex CLI or Codex App window. Real-time multi-view synchronization still needs an observer UI or an event-subscription design. `codex exec --json` remains available with `--codex-adapter exec` for fallback and debugging.
 
-Normal messages from the same channel context are processed sequentially. If Codex is already running and another normal message arrives, the middleware replies with a queued notice; commands such as `/status`, `/stop`, and approval commands still run immediately. Each task starts with a short "processing" notice and does not repeat the Session ID; use `/status` for session and permission details. The default `brief` progress mode sends planning/reasoning, search, and file-change summaries, but suppresses command/tool details. Use `/progress detailed` or `--progress detailed` when full debugging detail is needed.
+Normal messages from the same channel context are processed sequentially. If Codex is already running and another normal message arrives, the middleware replies with a queued notice; commands such as `/status`, `/stop`, and approval commands still run immediately. Each task starts with a short "processing" notice and does not repeat the Session ID; use `/status` for session, context token usage, and permission details. The default `brief` progress mode sends planning/reasoning, search, and file-change summaries, but suppresses command/tool details. Use `/progress detailed` or `--progress detailed` when full debugging detail is needed.
 
 Weixin outbound messages are serialized with a small interval to reduce dropped or hidden rapid-fire progress messages. The default send interval is 1200ms. If `sendmessage` hits rate limiting or a temporary failure, the adapter retries with backoff; only the final failure moves the channel to `degraded` and records `lastError`, instead of logging the request as a successful OUT. While Codex is running, the Weixin channel fetches a `typing_ticket` with `getconfig`, then periodically calls `sendtyping` to keep the peer-side "typing" state visible; it stops typing when the task finishes or `/stop` is used.
 
@@ -65,7 +65,7 @@ To invalidate Weixin login, stop the middleware and delete the whole `state/weix
 
 - `/help`: show available commands.
 - `/new`: create a new Codex session for the current channel context.
-- `/status`: show Bridge, channel, Codex, processing, queue, session, and working directory status.
+- `/status`: show the Codex session, context token usage, bridge queue, approvals, permission mode, progress mode, and channel health.
 - `/sessions`: list sessions known to the current channel context.
 - `/sessions all` or `/all-sessions`: list all discoverable Codex history session IDs.
 - `/resume <session>` / `/use <session>`: resume and bind a Codex session.

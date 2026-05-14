@@ -766,41 +766,57 @@ Status: idle
 
 ## 8. `/status` 设计
 
-`/status` 由三部分合成：
+`/status` 使用 Markdown 文本返回，主要由三部分合成：
 
 - Bridge Core 状态。
 - Channel Adapter 状态。
-- Codex Adapter 状态。
+- Codex Adapter 状态，包括 app-server `thread/tokenUsage/updated` 提供的上下文 token 用量。
 
 普通用户输出：
 
-```text
-Bridge: ok
-Channel: weixin connected
-Processing: yes
-Codex: running turn=exec-turn-123 task=修复测试
-Session: cdx-8f2a
-Progress mode: brief
-Cwd: /path/to/project
-Queued messages: 0
-Pending approvals: 0
-操作: /stop 终止当前任务
+```md
+**Codex 状态**
+- Session: `cdx-8f2a`
+- State: `running turn=exec-turn-123 task=修复测试`
+- Context: `12,345 / 200,000 tokens` (6.2%, remaining 187,655) last turn `789 tokens` (input 10,000, cached 4,000, output 2,345, reasoning 345)
+- Cwd: `/path/to/project`
+
+**Bridge**
+- Processing: `yes`
+- Queue: `0`
+- Pending approvals: `0`
+- Progress: `brief`
+- Permission: `approval sandbox=workspace-write`
+- Action: `/stop` 终止当前任务
+
+**Channel**
+- Adapter: `weixin`
+- State: `connected`
 ```
 
 管理员输出：
 
-```text
-Bridge: ok
-Channel: openclaw-weixin 2.4.3, connected
-Codex: app-server, running
-Session: cdx-8f2a
-Route: wx:account:peer -> cdx-8f2a
-Last inbound: 00:41
-Last outbound: 00:40
-Last error: none
+```md
+**Codex 状态**
+- Session: `cdx-8f2a`
+- State: `running`
+- Context: `12,345 / 200,000 tokens` (6.2%, remaining 187,655) last turn `789 tokens`
+- Cwd: `/path/to/project`
+
+**Bridge**
+- Processing: `yes`
+- Queue: `0`
+- Pending approvals: `0`
+- Progress: `brief`
+- Permission: `approval sandbox=workspace-write`
+
+**Channel**
+- Adapter: `openclaw-weixin`
+- State: `connected`
+- Last error: none
 ```
 
-`/status` 是命令消息，不进入普通 prompt 队列；Codex 正在执行时也应立即回复。`Processing: yes` 来自 Bridge route worker，`Codex: ...` 来自 Codex Adapter 状态，二者结合用于判断是否可用 `/stop`。
+`/status` 是命令消息，不进入普通 prompt 队列；Codex 正在执行时也应立即回复。`Processing` 来自 Bridge route worker，`State` 来自 Codex Adapter 状态，二者结合用于判断是否可用 `/stop`。微信账号、发送者、conversation 等身份信息不放入 `/status`，需要时用 `/whoami` 查看。
 
 ## 8.0.1 `/stop` 设计
 
@@ -962,6 +978,7 @@ Bridge 会把进度事件标记为 `reasoning`、`todo`、`search`、`file_chang
 app-server adapter 可用事件：
 
 - `thread/status/changed`
+- `thread/tokenUsage/updated`
 - `turn/started`
 - `turn/completed`
 - `turn/diff/updated`
@@ -971,16 +988,20 @@ app-server adapter 可用事件：
 - `item/agentMessage/delta`
 - `item/plan/delta`
 - `item/reasoning/summaryTextDelta`
+- `item/reasoning/summaryPartAdded`
 - `command/exec/outputDelta`
 - `item/commandExecution/outputDelta`
 - `item/fileChange/patchUpdated`
 - `serverRequest/resolved`
+
+其中 `thread/tokenUsage/updated` 会更新当前 session 的上下文 token 用量，供 `/status` 展示。`agentMessage.phase=commentary` 的消息视为阶段性 commentary 更新，转成 `assistant.progress`；`phase=final_answer` 或缺省 phase 按兼容路径进入最终回复。`item/reasoning/textDelta` 默认通过 `optOutNotificationMethods` 关闭，避免把 raw reasoning 推送到聊天通道。
 
 ### 8.2.2 微信发送策略
 
 微信不适合逐 token 发送。需要节流和合并：
 
 - agent message delta 每 2 到 5 秒或累计 300 到 800 字发送一次。
+- commentary phase 的 agent message 会按进度文本发送；final answer phase 或未知 phase 继续聚合为最终回复。
 - reasoning summary/计划更新在默认 `brief` 模式发送，作为用户可见的“自言自语”进度；命令和工具细节仍默认隐藏。
 - command output 默认只发送开始、结束、失败和最后若干行摘要。
 - 文件变更默认发送文件列表摘要，不直接发送完整 diff。

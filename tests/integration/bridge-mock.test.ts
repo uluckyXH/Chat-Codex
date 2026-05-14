@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Bridge } from "../../src/bridge/bridge.js";
 import { MockChannelAdapter } from "../../src/channels/mock/mock-channel-adapter.js";
 import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
-import type { CodexAdapter, CodexEvent, CodexSession, CodexSessionStatus, CodexSessionSummary, StartSessionInput } from "../../src/codex/types.js";
+import type { CodexAdapter, CodexEvent, CodexSession, CodexSessionContextUsage, CodexSessionStatus, CodexSessionSummary, StartSessionInput } from "../../src/codex/types.js";
 import type { TranscriptSink } from "../../src/logging/transcript.js";
 import type { ChannelMedia, ChannelMessage, ChannelTarget } from "../../src/protocol/channel.js";
 import fs from "node:fs";
@@ -57,6 +57,31 @@ class AdapterApprovalIdCodexAdapter extends MockCodexAdapter {
       },
     };
     yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class ContextUsageCodexAdapter extends MockCodexAdapter {
+  private readonly context: CodexSessionContextUsage = {
+    total: {
+      totalTokens: 12345,
+      inputTokens: 10000,
+      cachedInputTokens: 4000,
+      outputTokens: 2345,
+      reasoningOutputTokens: 345,
+    },
+    last: {
+      totalTokens: 789,
+      inputTokens: 600,
+      cachedInputTokens: 200,
+      outputTokens: 189,
+      reasoningOutputTokens: 89,
+    },
+    modelContextWindow: 200000,
+  };
+
+  override async getStatus(sessionId: string): Promise<CodexSessionStatus> {
+    const status = await super.getStatus(sessionId);
+    return { ...status, context: this.context };
   }
 }
 
@@ -150,7 +175,7 @@ test("Bridge handles new session, prompt, status, and approval over mock channel
   assert.ok(channel.sentMessages.some((message) => message.text.includes("Capabilities")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已绑定 Codex 会话")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("Mock Codex 回复: 你好")));
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("Bridge: ok")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("**Codex 状态**")));
   const approvalHandledMessage = channel.sentMessages.find((message) => message.text.startsWith("审批已处理:"))?.text ?? "";
   assert.ok(approvalHandledMessage.includes("已通过"));
   assert.equal(/\[a[0-9a-z]+]/.test(approvalHandledMessage), false, "approval handled reply should not expose internal id");
@@ -172,17 +197,35 @@ test("Bridge exposes all sessions command for channel users", async () => {
   await channel.emitText("/all-sessions", { conversationId: "main" });
   await bridge.stop();
 
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("/sessions all - 列出全部可发现 Codex 会话")));
-  const help = channel.sentMessages.find((message) => message.text.startsWith("可用命令:"))?.text ?? "";
-  assert.ok(help.includes("/OK - 批准当前审批"));
-  assert.ok(help.includes("/NO [理由] - 拒绝当前审批"));
-  assert.ok(help.includes("/permission [approval|full confirm]"));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("`/sessions all` 列出全部可发现 Codex 会话")));
+  const help = channel.sentMessages.find((message) => message.text.startsWith("**可用命令**"))?.text ?? "";
+  assert.ok(help.includes("`/OK` 批准当前审批"));
+  assert.ok(help.includes("`/NO [理由]` 拒绝当前审批"));
+  assert.ok(help.includes("`/permission [approval|full confirm]`"));
   assert.equal(help.includes("/approve [id]"), false);
   assert.equal(help.includes("cancel"), false);
   const allSessionsMessages = channel.sentMessages.filter((message) => message.text.startsWith("全部可发现 Codex 会话"));
   assert.equal(allSessionsMessages.length, 2);
   assert.ok(allSessionsMessages.every((message) => message.text.includes("mock-codex-1")));
   assert.ok(allSessionsMessages.every((message) => message.text.includes("mock-codex-2")));
+});
+
+test("Bridge status includes session token context without channel identity details", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new ContextUsageCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/new", { senderId: "alice", conversationId: "project-room" });
+  await channel.emitText("/status", { senderId: "alice", conversationId: "project-room" });
+  await bridge.stop();
+
+  const statusMessage = channel.sentMessages.at(-1)?.text ?? "";
+  assert.match(statusMessage, /\*\*Codex 状态\*\*/);
+  assert.match(statusMessage, /Session: `mock-codex-1`/);
+  assert.match(statusMessage, /Context: `12,345 \/ 200,000 tokens` \(6\.2%, remaining 187,655\) last turn `789 tokens`/);
+  assert.doesNotMatch(statusMessage, /mock:mock-account:direct:project-room/);
+  assert.doesNotMatch(statusMessage, /Mock User \(alice\)/);
 });
 
 test("Bridge rejects latest approval with /NO and an optional reason", async () => {
@@ -286,7 +329,7 @@ test("Bridge progress command enables detailed progress for the current route", 
   await bridge.waitForIdle();
   await bridge.stop();
 
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("当前进度投递模式: detailed")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("当前模式: `detailed`")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("正在执行命令: npm test")));
 });
 
@@ -304,10 +347,10 @@ test("Bridge permission command shows and changes Codex run policy", async () =>
   await channel.emitText("/permission approval");
   await bridge.stop();
 
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("当前权限模式: approval sandbox=workspace-write")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("当前模式: `approval sandbox=workspace-write`")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("/permission full confirm")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已切换 Codex 权限模式: full")));
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("Permission: full")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("Permission: `full`")));
   assert.equal(codex.getRunPolicy().permissionMode, "approval");
 });
 
@@ -337,9 +380,9 @@ test("Bridge status reports running work and /stop cancels the current task", as
 
   await channel.emitText("/status");
   const statusMessage = channel.sentMessages.at(-1)?.text ?? "";
-  assert.match(statusMessage, /Processing: yes/);
-  assert.match(statusMessage, /Codex: running/);
-  assert.match(statusMessage, /操作: \/stop/);
+  assert.match(statusMessage, /Processing: `yes`/);
+  assert.match(statusMessage, /State: `running/);
+  assert.match(statusMessage, /Action: `\/stop`/);
 
   await channel.emitText("/stop");
   await bridge.waitForIdle();
@@ -363,7 +406,7 @@ test("Bridge queues normal prompts for the same route while keeping commands res
   await bridge.stop();
 
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已加入队列")));
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("Queued messages")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("Queue:")));
   const firstIndex = channel.sentMessages.findIndex((message) => message.text === "Mock Codex 回复: 第一条");
   const secondIndex = channel.sentMessages.findIndex((message) => message.text === "Mock Codex 回复: 第二条");
   assert.ok(firstIndex >= 0);
@@ -392,7 +435,7 @@ test("Bridge binds first route to initial session when provided", async () => {
   await bridge.stop();
 
   assert.ok(channel.sentMessages.some((message) => message.text.includes("Mock Codex 回复: 继续已有会话")));
-  assert.ok(channel.sentMessages.some((message) => message.text.includes(`Session: ${initial.id}`)));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes(`Session: \`${initial.id}\``)));
 });
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 1000): Promise<void> {

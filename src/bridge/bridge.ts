@@ -1,7 +1,7 @@
 import type { ApprovalDecision } from "../approvals/types.js";
 import { ApprovalManager } from "../approvals/approval-manager.js";
 import type { CodexRunPolicy, CodexRunPolicyStatus } from "../codex/codex-cli.js";
-import type { CodexAdapter, CodexProgressKind, CodexSession, CodexSessionStatus } from "../codex/types.js";
+import type { CodexAdapter, CodexProgressKind, CodexSession, CodexSessionContextUsage, CodexSessionStatus } from "../codex/types.js";
 import { parseCommand } from "../commands/parser.js";
 import type { Logger } from "../logging/logger.js";
 import { SilentLogger } from "../logging/logger.js";
@@ -102,7 +102,7 @@ export class Bridge {
         await this.createNewSession(message, target);
         return;
       case "status":
-        await this.sendText(target, await this.statusText(message.routeKey));
+        await this.sendText(target, await this.statusText(message));
         return;
       case "sessions":
         await this.sendText(target, await this.sessionsText(args[0]?.toLowerCase() === "all" ? undefined : message.routeKey));
@@ -118,7 +118,7 @@ export class Bridge {
         await this.sendText(target, this.whoamiText(message));
         return;
       case "debug":
-        await this.sendText(target, await this.debugText(message.routeKey));
+        await this.sendText(target, await this.debugText(message));
         return;
       case "progress":
       case "mode":
@@ -512,7 +512,8 @@ export class Bridge {
     }
   }
 
-  private async statusText(routeKey: string): Promise<string> {
+  private async statusText(message: ChannelMessage): Promise<string> {
+    const routeKey = message.routeKey;
     const channelStatus = await this.channel.getStatus();
     const binding = this.state.getBinding(routeKey);
     const localSession = binding ? this.state.getSession(binding.sessionId) : undefined;
@@ -527,19 +528,25 @@ export class Bridge {
     const policyStatus = this.runPolicyStatus();
     const policy = policyStatus?.policy ?? this.codex.getRunPolicy?.();
     return [
-      `Bridge: ok`,
-      `Channel: ${channelStatus.channelId} ${channelStatus.state}`,
-      `Processing: ${workerRunning ? "yes" : "no"}`,
-      `Codex: ${formatCodexStatus(sessionStatus)}`,
-      `Session: ${binding?.sessionId ?? "none"}`,
-      policy ? `Permission: ${formatRunPolicy(policy)}` : undefined,
-      policyStatus && !policyStatus.interactiveApprovals ? `Approval: ${formatApprovalSupport(policyStatus)}` : undefined,
-      `Progress mode: ${this.progressModeFor(routeKey)}`,
-      binding ? `Cwd: ${localSession?.session.cwd ?? "unknown"}` : undefined,
-      `Queued messages: ${this.routeQueues.get(routeKey)?.length ?? 0}`,
-      `Pending approvals: ${approvals.length}`,
-      workerRunning && binding ? "操作: /stop 终止当前任务" : undefined,
-      channelStatus.lastError ? `Last channel error: ${channelStatus.lastError}` : undefined,
+      "**Codex 状态**",
+      `- Session: \`${binding?.sessionId ?? "none"}\``,
+      `- State: \`${formatCodexStatus(sessionStatus)}\``,
+      `- Context: ${formatContextUsage(sessionStatus.context)}`,
+      binding ? `- Cwd: \`${localSession?.session.cwd ?? "unknown"}\`` : undefined,
+      "",
+      "**Bridge**",
+      `- Processing: \`${workerRunning ? "yes" : "no"}\``,
+      `- Queue: \`${this.routeQueues.get(routeKey)?.length ?? 0}\``,
+      `- Pending approvals: \`${approvals.length}\``,
+      `- Progress: \`${this.progressModeFor(routeKey)}\``,
+      policy ? `- Permission: \`${formatRunPolicy(policy)}\`` : undefined,
+      policyStatus && !policyStatus.interactiveApprovals ? `- Approval: \`${formatApprovalSupport(policyStatus)}\`` : undefined,
+      workerRunning && binding ? "- Action: `/stop` 终止当前任务" : undefined,
+      "",
+      "**Channel**",
+      `- Adapter: \`${channelStatus.channelId}\``,
+      `- State: \`${channelStatus.state}\``,
+      channelStatus.lastError ? `- Last error: ${channelStatus.lastError}` : undefined,
     ].filter(Boolean).join("\n");
   }
 
@@ -572,19 +579,19 @@ export class Bridge {
 
   private whoamiText(message: ChannelMessage): string {
     return [
-      "当前通道身份:",
-      `Route: ${message.routeKey}`,
-      `Channel: ${message.channelId}`,
-      `Account: ${message.accountId ?? "default"}`,
-      `Sender: ${message.sender.displayName ?? message.sender.id} (${message.sender.id})`,
-      `Conversation: ${message.conversation.kind}:${message.conversation.id}`,
+      "**当前通道身份**",
+      `- Route: \`${message.routeKey}\``,
+      `- Channel: \`${message.channelId}\``,
+      `- Account: \`${message.accountId ?? "default"}\``,
+      `- Conversation: \`${formatConversationContext(message.conversation.kind, message.conversation.id, message.conversation.displayName)}\``,
+      `- Sender: \`${formatPeerContext(message.sender.id, message.sender.displayName)}\``,
     ].join("\n");
   }
 
-  private async debugText(routeKey: string): Promise<string> {
-    const status = await this.statusText(routeKey);
+  private async debugText(message: ChannelMessage): Promise<string> {
+    const status = await this.statusText(message);
     const capabilities = this.channel.getCapabilities();
-    const sessions = this.state.listSessions(routeKey);
+    const sessions = this.state.listSessions(message.routeKey);
     return [
       status,
       "",
@@ -597,22 +604,21 @@ export class Bridge {
 
   private helpText(): string {
     return [
-      "可用命令:",
-      "/help - 查看命令",
-      "/new - 创建新 Codex 会话",
-      "/status - 查看状态",
-      "/sessions - 列出当前上下文会话",
-      "/sessions all - 列出全部可发现 Codex 会话",
-      "/all-sessions - 同 /sessions all",
-      "/resume <session> - 恢复并绑定已有会话",
-      "/use <session> - 切换到已有会话",
-      "/whoami - 查看当前通道身份",
-      "/debug - 查看调试状态",
-      "/progress [brief|detailed|silent] - 查看或设置当前上下文进度投递模式",
-      "/permission [approval|full confirm] - 查看或切换 Codex 权限模式",
-      "/OK - 批准当前审批",
-      "/NO [理由] - 拒绝当前审批",
-      "/stop - 终止当前正在处理的 Codex 任务",
+      "**可用命令**",
+      "- `/help` 查看命令",
+      "- `/new` 创建新 Codex 会话",
+      "- `/status` 查看状态、队列、审批和上下文 token 用量",
+      "- `/sessions` 列出当前上下文会话",
+      "- `/sessions all` 列出全部可发现 Codex 会话",
+      "- `/resume <session>` 恢复并绑定已有会话",
+      "- `/use <session>` 切换到已有会话",
+      "- `/whoami` 查看当前通道身份",
+      "- `/debug` 查看调试状态",
+      "- `/progress [brief|detailed|silent]` 查看或设置当前上下文进度投递模式",
+      "- `/permission [approval|full confirm]` 查看或切换 Codex 权限模式",
+      "- `/OK` 批准当前审批",
+      "- `/NO [理由]` 拒绝当前审批",
+      "- `/stop` 终止当前正在处理的 Codex 任务",
     ].join("\n");
   }
 
@@ -630,10 +636,11 @@ export class Bridge {
   private progressModeText(routeKey: string): string {
     const mode = this.progressModeFor(routeKey);
     return [
-      `当前进度投递模式: ${mode}`,
-      "brief: 只发送计划、自言自语、搜索和文件变更摘要，不发送命令/工具细节。",
-      "detailed: 发送所有可见进度，包括命令和工具调用细节。",
-      "silent: 不发送进度文本，只发送开始、审批、最终回复和媒体。",
+      "**进度投递**",
+      `- 当前模式: \`${mode}\``,
+      "- `brief`: 只发送计划、自言自语、搜索和文件变更摘要，不发送命令/工具细节。",
+      "- `detailed`: 发送所有可见进度，包括命令和工具调用细节。",
+      "- `silent`: 不发送进度文本，只发送开始、审批、最终回复和媒体。",
     ].join("\n");
   }
 
@@ -641,13 +648,14 @@ export class Bridge {
     const policyStatus = this.runPolicyStatus();
     const policy = policyStatus?.policy ?? this.codex.getRunPolicy?.();
     return [
-      `当前权限模式: ${policy ? formatRunPolicy(policy) : "unknown"}`,
-      policyStatus ? `审批支持: ${formatApprovalSupport(policyStatus)}` : undefined,
-      "approval: 使用 workspace-write sandbox；是否能在微信里弹审批取决于 Codex adapter。",
-      "full: 完全权限，跳过审批和沙箱，风险很高。",
-      "切回安全沙箱模式: /permission approval",
-      "切到完全权限: /permission full confirm",
-      policyStatus?.note ? `说明: ${policyStatus.note}` : undefined,
+      "**权限模式**",
+      `- 当前模式: \`${policy ? formatRunPolicy(policy) : "unknown"}\``,
+      policyStatus ? `- 审批支持: \`${formatApprovalSupport(policyStatus)}\`` : undefined,
+      "- `approval`: 使用 `workspace-write` sandbox；是否能在微信里弹审批取决于 Codex adapter。",
+      "- `full`: 完全权限，跳过审批和沙箱，风险很高。",
+      "- 切回安全沙箱模式: `/permission approval`",
+      "- 切到完全权限: `/permission full confirm`",
+      policyStatus?.note ? `- 说明: ${policyStatus.note}` : undefined,
     ].filter(Boolean).join("\n");
   }
 
@@ -686,6 +694,36 @@ function formatApprovalSupport(status: CodexRunPolicyStatus): string {
     return status.effectiveApprovalPolicy ? `interactive effective=${status.effectiveApprovalPolicy}` : "interactive";
   }
   return status.effectiveApprovalPolicy ? `not interactive effective=${status.effectiveApprovalPolicy}` : "not interactive";
+}
+
+function formatContextUsage(context: CodexSessionContextUsage | undefined): string {
+  if (!context) return "`unavailable`";
+  const total = context.total.totalTokens;
+  const window = context.modelContextWindow;
+  const usage = window && window > 0
+    ? `\`${formatNumber(total)} / ${formatNumber(window)} tokens\` (${formatPercent(total / window)}, remaining ${formatNumber(Math.max(window - total, 0))})`
+    : `\`${formatNumber(total)} tokens\``;
+  return [
+    usage,
+    `last turn \`${formatNumber(context.last.totalTokens)} tokens\``,
+    `(input ${formatNumber(context.total.inputTokens)}, cached ${formatNumber(context.total.cachedInputTokens)}, output ${formatNumber(context.total.outputTokens)}, reasoning ${formatNumber(context.total.reasoningOutputTokens)})`,
+  ].join(" ");
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatConversationContext(kind: string, id: string, displayName?: string): string {
+  return displayName ? `${kind}:${id} (${displayName})` : `${kind}:${id}`;
+}
+
+function formatPeerContext(id: string, displayName?: string): string {
+  return displayName ? `${displayName} (${id})` : id;
 }
 
 function isConfirmed(args: string[]): boolean {

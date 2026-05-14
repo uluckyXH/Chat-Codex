@@ -10,13 +10,29 @@ export interface CodexSession {
   title?: string;
 }
 
-export type CodexSessionStatus =
+export interface CodexTokenUsageBreakdown {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+export interface CodexSessionContextUsage {
+  total: CodexTokenUsageBreakdown;
+  last: CodexTokenUsageBreakdown;
+  modelContextWindow?: number | null;
+}
+
+export type CodexSessionBaseStatus =
   | { type: "idle" }
   | { type: "running"; task?: string; turnId?: string }
   | { type: "waiting_approval"; detail?: string }
   | { type: "waiting_input"; detail?: string }
   | { type: "failed"; error: string }
   | { type: "unknown"; detail?: string };
+
+export type CodexSessionStatus = CodexSessionBaseStatus & { context?: CodexSessionContextUsage };
 
 export type CodexEvent =
   | { type: "turn.started"; sessionId: string; turnId: string }
