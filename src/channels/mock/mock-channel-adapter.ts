@@ -10,6 +10,8 @@ import type {
   SendOptions,
   SendResult,
 } from "../../protocol/channel.js";
+import type { ChannelDeliveryPolicy } from "../../protocol/delivery-policy.js";
+import { DEFAULT_CHANNEL_DELIVERY_POLICY } from "../../protocol/delivery-policy.js";
 import { buildRouteKey } from "../../protocol/channel.js";
 
 export interface SentMockMessage {
@@ -38,8 +40,8 @@ export interface MockChannelAdapterOptions {
 }
 
 export class MockChannelAdapter implements ChannelAdapter {
-  readonly id = "mock";
-  readonly label = "Mock Channel";
+  readonly id: string = "mock";
+  readonly label: string = "Mock Channel";
   readonly sentMessages: SentMockMessage[] = [];
   readonly sentMedia: SentMockMedia[] = [];
   readonly sentTyping: SentMockTyping[] = [];
@@ -62,7 +64,7 @@ export class MockChannelAdapter implements ChannelAdapter {
   }
 
   async getStatus(): Promise<ChannelStatus> {
-    return this.state;
+    return { ...this.state, channelId: this.id };
   }
 
   getCapabilities(): ChannelCapabilities {
@@ -76,6 +78,10 @@ export class MockChannelAdapter implements ChannelAdapter {
       messageUpdate: false,
       streamingHint: false,
     };
+  }
+
+  getDeliveryPolicy(): ChannelDeliveryPolicy {
+    return DEFAULT_CHANNEL_DELIVERY_POLICY;
   }
 
   onMessage(handler: ChannelMessageHandler): void {

@@ -128,8 +128,12 @@ Terminal / Weixin / future channels
 - Bridge Core 不 import `openclaw-weixin` 类型。
 - Command Router 不 import `openclaw-weixin` 类型。
 - Approval Manager 不 import `openclaw-weixin` 类型。
-- 具体渠道差异只存在于 `src/channels/<channel>/`。
+- 具体渠道协议差异只存在于 `src/channels/<channel>/`。
+- 具体渠道的投递差异应优先表达为通用 `ChannelCapabilities`、delivery policy、route policy 或 adapter-owned 行为，而不是在 Bridge Core 中散落渠道名判断。
+- 如果短期必须在 Bridge Core 做渠道特例，需要有测试覆盖，并在文档或测试报告里说明后续如何收敛成通用策略。
 - 新渠道接入时，只要实现 `ChannelAdapter` 即可复用 Codex Adapter、命令、审批、状态和日志。
+
+渠道投递策略详见 `docs/channel-delivery-policy.zh-CN.md`。当前实现通过 `ChannelAdapter.getDeliveryPolicy()` 控制 task-start、progress、`/progress` 和 refresh 命令。
 
 ### 3.0.2 Adapter Contract 草案
 
@@ -342,7 +346,7 @@ type ChannelMessage = {
 - `/debug`
 - `/permission [approval|full confirm]`
 - `/OK`
-- `/NO [理由]`
+- `/NO`
 - `/stop`
 
 命令处理结果直接通过 Channel Adapter 回复微信，不进入 Codex。
@@ -363,7 +367,7 @@ type CodexAdapter = {
   cancel?(sessionId: string): Promise<void>;
   getStatus(sessionId: string): Promise<CodexSessionStatus>;
   listSessions(routeKey?: string): Promise<CodexSessionSummary[]>;
-  resolveApproval?(approvalKey: string, decision: ApprovalDecision, reason?: string): Promise<void>;
+  resolveApproval?(approvalKey: string, decision: ApprovalDecision): Promise<void>;
   getRunPolicy?(): CodexRunPolicy;
   setRunPolicy?(policy: CodexRunPolicy): void;
   getRunPolicyStatus?(): CodexRunPolicyStatus;
@@ -547,8 +551,8 @@ src/channels/<channel-id>/
 - 已实现从 `$CODEX_HOME/state_5.sqlite`、`$CODEX_HOME/session_index.jsonl` 和 `$CODEX_HOME/sessions/**/*.jsonl` 发现历史会话，并优先展示 Codex 保存的标题或首条用户消息。
 - 已实现 `terminal codex` 启动时先选会话、再选权限模式，并在启动摘要里显示本次会话、工作目录、权限和进度模式。
 - 已用中间件真实调用 `codex exec --json` 并收到回复。
-- `weixin codex` 启动入口已启用运行期 transcript：Bridge 收到微信消息、向微信发送回复、进度或媒体时，会以彩色聊天记录样式同步打印到启动中间件的终端；默认非 TTY 输出保持纯文本，方便重定向日志。
-- 已把 `codex exec --json` 中可见的 reasoning summary、命令、工具、文件变更等事件转换为微信进度消息。
+- `weixin codex` 启动入口已启用运行期 transcript：Bridge 收到微信消息、向微信发送回复、按投递策略发送进度或媒体时，会以彩色聊天记录样式同步打印到启动中间件的终端；默认非 TTY 输出保持纯文本，方便重定向日志。
+- 已把 `codex exec --json` 中可见的 reasoning summary、命令、工具、文件变更等事件转换为通用 progress 事件；是否投递到具体渠道由 `ChannelDeliveryPolicy` 决定。
 
 限制：
 
@@ -603,7 +607,7 @@ src/channels/<channel-id>/
 - 已实现 `codex app-server --listen stdio://` 子进程管理、JSON-RPC request/response、通知分发和停止清理。
 - 已实现 `thread/start`、`thread/resume`、`turn/start`、`turn/interrupt`。
 - 已实现 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval`，并兼容旧 `execCommandApproval`、`applyPatchApproval`。
-- 已把 app-server 原始 request id 保存为内部 `adapterApprovalId`，微信用户只需要回复 `/OK` 或 `/NO [理由]`。
+- 已把 app-server 原始 request id 保存为内部 `adapterApprovalId`，微信用户只需要回复 `/OK` 或 `/NO`。
 
 CLI JSONL adapter 继续保留为回退方案，不再作为完整审批主线。
 
@@ -710,7 +714,7 @@ Codex Adapter 已从 CLI JSONL 验证链路升级为默认 app-server 接入；C
 - 重启恢复。
 - 微信通道重连。
 - Codex app-server 重连。
-- pending approval 超时处理。
+- Codex/app-server 主动取消或用户 `/stop` 后的 pending approval 清理。
 - 版本升级检查。
 - 测试报告归档和回归测试清单。
 
@@ -721,6 +725,8 @@ Codex Adapter 已从 CLI JSONL 验证链路升级为默认 app-server 接入；C
 核心要求：
 
 - 代码必须按本文档架构分层，不允许把 Codex、渠道、命令、状态混在一个模块里。
+- 模块拆分按职责边界、状态所有权、协议边界和测试边界判断，行数只作为 review 触发信号，不作为硬性拆分指标。
+- 对超过 300-400 行的文件要检查是否职责过多；超过 600 行的业务文件应优先拆分，但类型声明、测试样例、声明式数据或内聚状态机可以保留，并记录理由和后续切分点。
 - 以中文文档和中文测试报告为主。
 - 每次功能实现都要自测。
 - 每次自测都要在 `reports/tests/` 下留下报告。
@@ -770,7 +776,7 @@ Status: idle
 
 - Bridge Core 状态。
 - Channel Adapter 状态。
-- Codex Adapter 状态，包括模型信息、reasoning effort，以及 app-server `thread/tokenUsage/updated` 提供的 token 用量。`tokenUsage.total` 是累计用量，不能当作当前上下文窗口占用；`/status` 用 `tokenUsage.last` 近似当前窗口，并把累计量单独展示为 `total usage`。`last turn output` 是最近一次 token usage 更新里的输出 token，不是会话累计输出。
+- Codex Adapter 状态，包括模型信息、reasoning effort，以及 app-server `thread/tokenUsage/updated` 提供的 token 用量。`tokenUsage.total` 是累计 API 用量，不能当作当前上下文窗口占用；`/status` 用 `tokenUsage.last` 近似当前窗口，并把累计量单独展示为 `Session API usage`。`Last turn tokens.output` 是最近一次 token usage 更新里的输出 token，累计输出看 `Session API usage.output`。
 
 普通用户输出：
 
@@ -779,14 +785,16 @@ Status: idle
 - Session: `cdx-8f2a`
 - State: `running turn=exec-turn-123 task=修复测试`
 - Model: `gpt-5.1-codex` provider=`openai` effort=`medium`
-- Context: `164,171 / 258,400 tokens` (63.5%, remaining 94,229) (last turn input 160,000, cached 120,000, output 4,171, reasoning output 1,200) total usage `34,375,973 tokens`
+- Context: `164,171 / 258,400 tokens` (63.5%, remaining 94,229)
+- Last turn tokens: input `160,000`, cached `120,000`, output `4,171`, reasoning output `1,200`
+- Session API usage: total `34,375,973`, input `34,282,029`, cached `33,213,184`, output `93,944`, reasoning output `30,181`
 - Cwd: `/path/to/project`
 
 **Bridge**
 - Processing: `yes`
 - Queue: `0`
 - Pending approvals: `0`
-- Progress: `brief`
+- Progress: `disabled` (微信渠道不投递进度)
 - Permission: `approval sandbox=workspace-write`
 - Action: `/stop` 终止当前任务
 
@@ -802,14 +810,16 @@ Status: idle
 - Session: `cdx-8f2a`
 - State: `running`
 - Model: `gpt-5.1-codex` provider=`openai` effort=`medium`
-- Context: `164,171 / 258,400 tokens` (63.5%, remaining 94,229) (last turn input 160,000, cached 120,000, output 4,171, reasoning output 1,200) total usage `34,375,973 tokens`
+- Context: `164,171 / 258,400 tokens` (63.5%, remaining 94,229)
+- Last turn tokens: input `160,000`, cached `120,000`, output `4,171`, reasoning output `1,200`
+- Session API usage: total `34,375,973`, input `34,282,029`, cached `33,213,184`, output `93,944`, reasoning output `30,181`
 - Cwd: `/path/to/project`
 
 **Bridge**
 - Processing: `yes`
 - Queue: `0`
 - Pending approvals: `0`
-- Progress: `brief`
+- Progress: `disabled` (微信渠道不投递进度)
 - Permission: `approval sandbox=workspace-write`
 
 **Channel**
@@ -873,7 +883,7 @@ type PendingApproval = {
   reason?: string;
   risk?: "low" | "medium" | "high" | "unknown";
   availableDecisions: string[];
-  expiresAt: string;
+  expiresAt?: string;
   raw: unknown;
 };
 ```
@@ -894,7 +904,7 @@ Reason: inspect workspace state
 
 快捷回复：
 /OK
-/NO [理由]
+/NO
 ```
 
 高风险命令必须显示风险提示：
@@ -909,22 +919,22 @@ Reason: inspect workspace state
 命令执行审批：
 
 - `/OK` -> `accept`
-- `/NO [理由]` -> `decline`
+- `/NO` -> `decline`
 - `/stop` -> 终止当前 turn
 
 文件变更审批：
 
 - `/OK` -> `accept`
-- `/NO [理由]` -> `decline`
+- `/NO` -> `decline`
 - `/stop` -> 终止当前 turn
 
 权限审批：
 
 - `/OK` -> 只批准请求的最低权限和当前 turn scope。
-- `/NO [理由]` -> 返回最小或空权限。
+- `/NO` -> 返回最小或空权限。
 - `/stop` -> 返回拒绝并尝试中断当前 turn。
 
-审批 ID 是内部兼容字段，不作为普通微信用户操作入口；`/OK`、`/NO` 只作用于当前 `routeKey` 最新的 pending approval。拒绝理由保存在审批记录里，并通过 `CodexAdapter.resolveApproval(approvalKey, decision, reason?)` 传给当前 adapter。app-server adapter 会用原始 request id 回写 JSON-RPC response；exec 回退模式没有完整审批协议。
+审批 ID 是内部兼容字段，不作为普通微信用户操作入口；`/OK`、`/NO` 只作用于当前 `routeKey` 最新的 pending approval。app-server adapter 会用原始 request id 回写 JSON-RPC response；exec 回退模式没有完整审批协议。
 
 审批通知是关键消息，不按普通进度消息处理。Bridge 收到 `approval.requested` 后必须先创建 pending approval，再把审批提示投递到当前 `routeKey`；如果通道发送失败，例如微信 `sendmessage ret=-2`，Bridge 会按固定间隔持续重试，直到审批提示至少送达一次。若用户在重试期间已经通过 `/OK`、`/NO` 或 `/stop` 处理了该 pending approval，重试循环立即停止，避免已处理审批再次弹出。
 
@@ -934,12 +944,13 @@ Reason: inspect workspace state
 - 如果 Codex 提供 `proposedExecpolicyAmendment` 或 `proposedNetworkPolicyAmendments`，微信中必须明确展示“持久放行”。
 - 后续可设计 `/approve-policy <id>`，仅管理员可用。
 
-### 8.1.5 审批超时和状态
+### 8.1.5 审批生命周期和状态
 
 要求：
 
-- 默认审批超时，例如 10 分钟。
-- 超时后自动 `decline` 或 `cancel`，策略可配置。
+- Bridge 默认不设置本地审批 TTL，不会因为用户长时间未操作就让 `/OK`、`/P`、`/NO` 失效。
+- app-server pending request 的生命周期由用户决策、`/stop`、Codex/app-server 主动取消或进程结束驱动。
+- 如果未来启用本地 TTL，过期时必须同步向 Codex adapter 回写 `cancel` 或 `decline`，不能只从 Bridge pending 列表里移除。
 - `/status` 要展示 pending approvals 数量。
 - 同一 routeKey 同时有多个审批时，`/OK`、`/NO` 默认处理最新一条；普通用户不需要输入 ID。
 - 只有原微信上下文或管理员可以响应该审批。
@@ -947,7 +958,7 @@ Reason: inspect workspace state
 
 ## 8.2 阶段性回复和流式输出设计
 
-Codex 输出不是只有最终文本。微信桥接要把 Codex 事件转换成适合微信阅读的进度消息。
+Codex 输出不是只有最终文本。Bridge 会把 Codex 事件转换成通用 progress 事件；是否投递到具体聊天渠道由 `ChannelDeliveryPolicy` 决定。
 
 ### 8.2.1 事件来源
 
@@ -962,9 +973,9 @@ CLI JSONL adapter 可用事件：
 - `turn.failed`
 - `error`
 
-当前 CLI JSONL adapter 的阶段性微信输出：
+当前 CLI JSONL adapter 的阶段性输出（非微信渠道会按投递模式发送；微信渠道会在 Bridge 层丢弃 task-start 和 progress）：
 
-- `turn.started`：Bridge 发送简短“Codex 正在处理这条消息”提示，不在每次任务开始时重复刷 Session ID。
+- `turn.started`：非微信渠道由 Bridge 发送简短“Codex 正在处理这条消息”提示，不在每次任务开始时重复刷 Session ID；微信渠道不发送这条提示。
 - `item.completed` + `reasoning`：发送 `Codex 进度`，内容为 Codex 提供的 reasoning summary；兼容 `summary`、`summary_text`、顶层 `codex_thinking` 等不同 JSONL 形态。
 - `item.updated` + `plan_update`：发送计划更新，归类为 brief 模式可见的自言自语/计划进度。
 - `item.started/completed` + `command_execution`：发送命令开始或完成摘要；命令输出中的图片或文件路径只作为进度文本，不触发媒体发送。
@@ -975,9 +986,9 @@ Bridge 会把进度事件标记为 `reasoning`、`todo`、`search`、`file_chang
 
 - `brief`：默认模式，只投递计划/自言自语、搜索和文件变更摘要，不投递命令/工具细节。
 - `detailed`：调试模式，投递全部可见进度，包括命令开始/完成和工具调用。
-- `silent`：安静模式，不投递进度文本；开始处理、审批和最终回复仍会发送。文件发送只由 `/sendfile` 单次授权触发，不归 progress 模式控制。
+- `silent`：安静模式，不投递进度文本；非微信渠道仍会发送开始处理、审批和最终回复。文件发送只由 `/sendfile` 单次授权触发，不归 progress 模式控制。
 
-用户可通过 `/progress [brief|detailed|silent]` 为当前 route 调整模式；CLI 可通过 `--progress brief|detailed|silent` 设置默认模式。
+非微信渠道可通过 `/progress [brief|detailed|silent]` 为当前 route 调整模式；CLI 可通过 `--progress brief|detailed|silent` 设置默认模式。微信渠道固定禁用任务开始提示和阶段性进度，收到 `/progress` 时返回拒绝说明，不改变模式。微信专用 `/fff` 是静默刷新命令，不回复、不入队、不转发给 Codex。
 
 app-server adapter 可用事件：
 
@@ -1002,18 +1013,16 @@ app-server adapter 可用事件：
 
 ### 8.2.2 微信发送策略
 
-微信不适合逐 token 发送。需要节流和合并：
+微信不适合逐 token 或高频连续发送。当前微信策略是只投递关键消息，不投递 task-start 和 progress：
 
-- agent message delta 每 2 到 5 秒或累计 300 到 800 字发送一次。
-- commentary phase 的 agent message 会按进度文本发送；final answer phase 或未知 phase 继续聚合为最终回复。
-- reasoning summary/计划更新在默认 `brief` 模式发送，作为用户可见的“自言自语”进度；命令和工具细节仍默认隐藏。
-- command output 默认只发送开始、结束、失败和最后若干行摘要。
-- 文件变更默认发送文件列表摘要，不直接发送完整 diff。
-- turn 完成后发送最终结果，并标记为“完成”。
-- turn 失败或中断时发送明确状态。
+- task-start 和 `assistant.progress` 不发送到微信。
+- final answer、turn failed/error、审批提示、审批处理结果、队列提示、媒体发送结果和用户主动命令回复仍发送。
+- `/progress` 在微信中不可用；`/status` 显示 Progress 为 `disabled`。
+- `/fff` 在微信中静默处理，作为用户主动入站触发，不产生回复。
+- 非微信渠道仍可按 `brief`、`detailed`、`silent` 投递 progress。
 - 普通消息、阶段性输出和最终回复里的路径默认只当文本，不自动发送媒体。用户发送 `/sendfile <任务内容>` 时，Bridge 会给该 turn 追加内部协议提示，只在最终回复中解析 `BRIDGE_SEND_FILE: /absolute/path/to/file`，每轮最多发送 3 个文件，并从用户可见最终文本中移除协议行。若媒体上传失败，只发送一条聚合失败摘要，不逐个文件刷 fallback 文本。
 - Codex 运行期间启用微信 typing：`getconfig` 获取 ticket，`sendtyping` 周期续发；turn 完成、失败或 `/stop` 后停止 typing。
-- `WeixinAdapter` 出站发送采用单队列串行和最小发送间隔，降低连续进度消息在微信侧丢显或乱序的概率。
+- `WeixinAdapter` 出站发送采用单队列串行和最小发送间隔，降低连续消息在微信侧丢显或乱序的概率。
 - `sendmessage`、`getuploadurl` 的 HTTP 200 不直接视为成功；若 JSON 里 `ret/errcode` 非 0，会抛错并更新通道 `lastError`，避免终端 transcript 把失败请求打印成成功 OUT。
 - 终端 transcript 默认使用一行方向摘要加缩进消息体，例如 `微信 <= Alice | direct:...` 和 `微信 => direct:... | 进度`；TTY 下用颜色区分用户入站、Codex 回复、进度、审批、错误和媒体，完整 route/sender 只在 verbose 模式下展示。
 - WeixinAdapter 对 `sendmessage` 串行排队，默认最小发送间隔为 1200ms；遇到 45009 等限流错误、429/5xx 或临时网络错误时按退避重试，最终失败才更新通道 `state=degraded` 和 `lastError`。

@@ -178,7 +178,7 @@ async function runTerminalBridge(mode: "mock" | "codex", options: StartupOptions
 }
 
 async function runWeixinCodexBridge(options: StartupOptions = {}): Promise<void> {
-  const startup = await prepareCodexStartup(options);
+  const startup = await prepareCodexStartup(options, { progressDisabled: true });
   const channel = new WeixinAdapter({ verifyCodeProvider: askStdin });
   const codex = createRealCodexAdapter(startup);
   const bridge = new Bridge({
@@ -193,7 +193,7 @@ async function runWeixinCodexBridge(options: StartupOptions = {}): Promise<void>
 
   await bridge.start();
   await ensureWeixinLoggedIn(channel);
-  printRuntimeSummary("微信 Codex 中间件", startup, options.progressMode);
+  printRuntimeSummary("微信 Codex 中间件", startup, options.progressMode, { progressDisabled: true });
   await waitForShutdownSignal();
   await bridge.stop();
 }
@@ -234,7 +234,10 @@ function waitForShutdownSignal(): Promise<void> {
   });
 }
 
-async function prepareCodexStartup(options: StartupOptions): Promise<PreparedCodexStartup> {
+async function prepareCodexStartup(
+  options: StartupOptions,
+  display: { progressDisabled?: boolean } = {},
+): Promise<PreparedCodexStartup> {
   const status = await checkCodexCli();
   if (!status.available) {
     throw new Error(`Codex 不可用: ${status.error ?? "unknown error"}`);
@@ -263,6 +266,7 @@ async function prepareCodexStartup(options: StartupOptions): Promise<PreparedCod
       policy,
       adapterMode,
       progressMode: options.progressMode,
+      progressDisabled: display.progressDisabled,
     });
     return {
       policy,
@@ -386,6 +390,7 @@ function printStartupSelection(params: {
   policy: CodexRunPolicy;
   adapterMode: RealCodexAdapterMode;
   progressMode?: ProgressDeliveryMode;
+  progressDisabled?: boolean;
 }): void {
   console.log("");
   console.log("启动选择");
@@ -394,13 +399,14 @@ function printStartupSelection(params: {
   console.log(`- 工作目录: ${params.cwd}`);
   console.log(`- Codex Adapter: ${formatAdapterForCli(params.adapterMode)}`);
   console.log(`- 权限: ${formatPolicyForCli(params.policy)}`);
-  console.log(`- 进度: ${params.progressMode ?? "brief"}`);
+  console.log(`- 进度: ${formatProgressForCli(params.progressMode, params.progressDisabled)}`);
 }
 
 function printRuntimeSummary(
   title: string,
   startup: PreparedCodexStartup | { policy?: CodexRunPolicy; adapterMode?: RealCodexAdapterMode; sessionId?: string; sessionTitle?: string; cwd: string },
   progressMode?: ProgressDeliveryMode,
+  display: { progressDisabled?: boolean } = {},
 ): void {
   console.log("");
   console.log(`${title}已启动`);
@@ -409,7 +415,7 @@ function printRuntimeSummary(
   console.log(`- 工作目录: ${startup.cwd}`);
   if (startup.adapterMode) console.log(`- Codex Adapter: ${formatAdapterForCli(startup.adapterMode)}`);
   if (startup.policy) console.log(`- 权限: ${formatPolicyForCli(startup.policy)}`);
-  console.log(`- 进度: ${progressMode ?? "brief"}`);
+  console.log(`- 进度: ${formatProgressForCli(progressMode, display.progressDisabled)}`);
   console.log("- 退出: Ctrl+C");
 }
 
@@ -434,6 +440,10 @@ function formatAdapterForCli(adapterMode: RealCodexAdapterMode): string {
   return "exec（非交互；不支持微信审批，仅作为回退）";
 }
 
+function formatProgressForCli(progressMode: ProgressDeliveryMode | undefined, disabled?: boolean): string {
+  return disabled ? "disabled（微信渠道不投递）" : progressMode ?? "brief";
+}
+
 function createRealCodexAdapter(startup: PreparedCodexStartup | { policy?: CodexRunPolicy; adapterMode?: RealCodexAdapterMode }): CodexAdapter {
   const runPolicy = startup.policy ?? { permissionMode: "approval", sandbox: "workspace-write" };
   if (startup.adapterMode === "exec") {
@@ -455,7 +465,7 @@ function printHelp(): void {
     "    --permission approval|full       设置安全沙箱或完全权限",
     "    --codex-adapter app-server|exec  设置 Codex 接入方式；默认 app-server，支持微信审批",
     "    --yes-dangerously-full           非交互确认完全权限",
-    "    --progress brief|detailed|silent 设置默认进度投递模式",
+    "    --progress brief|detailed|silent 设置默认进度投递模式（微信渠道固定禁用）",
     "  codex-wechat-bridge weixin codex   启动真实微信通道 + Codex app-server",
     "  codex-wechat-bridge weixin status  查看 WeixinAdapter 当前状态",
     "  codex-wechat-bridge weixin login   显示第二阶段登录提示",

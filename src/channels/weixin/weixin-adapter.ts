@@ -10,6 +10,7 @@ import type {
   SendOptions,
   SendResult,
 } from "../../protocol/channel.js";
+import type { ChannelDeliveryPolicy } from "../../protocol/delivery-policy.js";
 import { buildRouteKey } from "../../protocol/channel.js";
 import { FileWeixinAccountStore, normalizeWeixinAccountId, type StoredWeixinAccount, type WeixinAccountStore } from "./weixin-account-store.js";
 import { WeixinApiClient, type WeixinApiClientOptions } from "./weixin-api.js";
@@ -80,6 +81,21 @@ const DEFAULT_OUTBOUND_MAX_RETRIES = 2;
 const DEFAULT_OUTBOUND_RETRY_BASE_DELAY_MS = 1500;
 const DEFAULT_OUTBOUND_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MEDIA_REQUEST_TIMEOUT_MS = 60_000;
+const WEIXIN_DELIVERY_POLICY: ChannelDeliveryPolicy = {
+  taskStart: "suppress",
+  progress: "suppress",
+  progressCommand: "disabled",
+  progressDisabledMessage: "微信渠道已禁用进度投递，/progress 在微信中不可用。",
+  statusProgressLabel: "disabled",
+  statusProgressDescription: "微信渠道不投递进度",
+  refreshCommands: [
+    {
+      command: "fff",
+      description: "微信专用静默刷新命令，不发送回复",
+      silent: true,
+    },
+  ],
+};
 
 export class WeixinAdapter implements ChannelAdapter {
   readonly id = "weixin";
@@ -238,6 +254,10 @@ export class WeixinAdapter implements ChannelAdapter {
       messageUpdate: false,
       streamingHint: true,
     };
+  }
+
+  getDeliveryPolicy(): ChannelDeliveryPolicy {
+    return WEIXIN_DELIVERY_POLICY;
   }
 
   onMessage(handler: ChannelMessageHandler): void {

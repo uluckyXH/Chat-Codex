@@ -10,6 +10,9 @@
 - `technical-design.zh-CN.md`
   中文技术设计。说明中间件架构、Node.js + TypeScript 技术选择、Codex adapter、Weixin adapter、审批流、阶段性输出、状态存储和分阶段实现路线。
 
+- `channel-delivery-policy.zh-CN.md`
+  中文渠道投递策略设计。说明 `ChannelDeliveryPolicy` 如何按渠道控制 task-start、progress、`/progress` 和 refresh 命令，避免 Bridge Core 写具体平台分支。
+
 - `development-and-test.zh-CN.md`
   中文开发与测试规范。说明代码分层、质量要求、每个功能的自测要求、测试报告目录和报告格式。
 
@@ -55,9 +58,10 @@ Codex <-> Middleware Core <-> WeixinAdapter <-> openclaw-weixin extracted commun
 
 1. 读 `requirements.zh-CN.md`，确认项目目标和边界。
 2. 读 `technical-design.zh-CN.md`，确认架构和分阶段路线。
-3. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
-4. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
-5. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
+3. 读 `channel-delivery-policy.zh-CN.md`，确认不同渠道的消息投递策略边界。
+4. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
+5. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
+6. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
 
 ## 分阶段工作顺序
 
@@ -91,4 +95,4 @@ npm run cli:weixin:login
 npm run cli:weixin:codex
 ```
 
-`weixin login` 已具备二维码登录入口。`weixin codex` 是真实微信通道 + Codex 的启动入口：启动时会读取本地微信凭证，已登录则直接启动，未登录则弹出二维码登录流程。默认 app-server 模式可以把 Codex command/file/permissions 审批请求推送到微信，并由 `/OK` 或 `/NO [理由]` 回写 Codex。真实扫码登录完成后要追加真实微信通道测试报告。
+`weixin login` 已具备二维码登录入口。`weixin codex` 是真实微信通道 + Codex 的启动入口：启动时会读取本地微信凭证，已登录则直接启动，未登录则弹出二维码登录流程。默认 app-server 模式可以把 Codex command/file/permissions 审批请求推送到微信，并由 `/OK` 或 `/NO` 回写 Codex。真实扫码登录完成后要追加真实微信通道测试报告。

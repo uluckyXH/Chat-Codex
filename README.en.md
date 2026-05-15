@@ -11,12 +11,12 @@ This project is OpenClaw-free at runtime. It must not depend on OpenClaw CLI, Op
 - A generic `ChannelAdapter` protocol is implemented so future channels can reuse the same bridge core.
 - Mock, Terminal, and Weixin channel adapters are implemented.
 - Bridge Core, command routing, approval management, memory state, and baseline logging are implemented.
-- The default `codex app-server` adapter is implemented. It uses stdio JSON-RPC to create/resume threads, start turns, and route command/file/permissions approval requests to Weixin `/OK`, `/P`, and `/NO [reason]`.
+- The default `codex app-server` adapter is implemented. It uses stdio JSON-RPC to create/resume threads, start turns, and route command/file/permissions approval requests to Weixin `/OK`, `/P`, and `/NO`.
 - The `codex exec --json` adapter is still available as a fallback mode and has been verified through the terminal channel with the real Codex CLI.
 - Weixin QR login, local account token persistence, text send, and basic `getupdates` polling support are implemented.
 - Explicit file delivery is implemented. Paths in ordinary replies and progress are treated as text; use `/sendfile <task>` when Codex should generate and send final files for that turn.
 - The `weixin codex` startup entry checks Codex availability and Weixin login state. It skips QR login when credentials are valid and starts QR login when credentials are missing.
-- The `weixin codex` daemon terminal prints inbound Weixin messages, outbound Codex replies, progress updates, and media sends in a colored chat-style transcript so the running conversation can be observed locally. Non-TTY output stays plain text by default.
+- The `weixin codex` daemon terminal prints inbound Weixin messages, outbound Codex replies, policy-delivered progress updates, and media sends in a colored chat-style transcript so the running conversation can be observed locally. Non-TTY output stays plain text by default.
 - History session lists prefer Codex SQLite titles or first user messages, then fall back to `session_index.jsonl` and rollout metadata.
 
 ## Commands
@@ -35,7 +35,7 @@ Real Codex mode supports startup options:
 
 ```bash
 npm run cli:terminal:codex -- --session new --permission approval --cwd ./workspaces/demo
-npm run cli:weixin:codex -- --session last --permission approval --progress brief
+npm run cli:weixin:codex -- --session last --permission approval
 ```
 
 - `--session new|last|<id>`: create a new session, resume the latest session, or bind a specific Codex session.
@@ -43,19 +43,19 @@ npm run cli:weixin:codex -- --session last --permission approval --progress brie
 - `--codex-adapter app-server|exec` / `--adapter app-server|exec`: choose the Codex adapter. The default `app-server` mode supports Weixin interactive approvals; `exec` is a non-interactive fallback and does not push approval requests to Weixin.
 - `--permission approval|full`: choose safe sandbox mode or full permission mode. The default `approval` mode uses the `workspace-write` sandbox and, with app-server, routes approval requests to Weixin; it keeps network access available so behavior matches the local Codex CLI `workspace-write` mode.
 - `--yes-dangerously-full`: non-interactive confirmation for full permission mode. Full mode bypasses approvals and sandboxing and is high risk.
-- `--progress brief|detailed|silent`: set the default progress delivery mode. `brief` is the default and suppresses command/tool details; `detailed` keeps full command/tool progress; `silent` sends only start, approvals, final replies, and media.
+- `--progress brief|detailed|silent`: set the default progress delivery mode for non-Weixin channels. The Weixin delivery policy suppresses task-start notices and progress messages to reduce outbound message count.
 
 During interactive startup, the middleware asks for the session first and then asks for the Codex permission mode for subsequent tasks. This keeps permission selection clear when resuming an older session. Choosing a new session displays the default working directory; missing directories are created automatically. If an existing session is selected, the middleware uses the working directory recorded in that Codex session history. Weixin-side `/permission` is scoped to the currently bound Codex session; only when no session is bound does it change the default permission mode for future new sessions.
 
 The default `codex app-server` mode can reuse Codex history threads and acts as the Codex client for the current Weixin conversation. It supports interactive approvals, turn interruption, token usage status updates, and commentary-phase message forwarding, but it does not live-sync Weixin-side interaction into another already-open Codex CLI or Codex App window. Real-time multi-view synchronization still needs an observer UI or an event-subscription design. `codex exec --json` remains available with `--codex-adapter exec` for fallback and debugging.
 
-Normal messages from the same channel context are processed sequentially. If Codex is already running and another normal message arrives, the middleware replies with a queued notice; commands such as `/status`, `/stop`, and approval commands still run immediately. Each task starts with a short "processing" notice and does not repeat the Session ID; use `/status` for session, model, context token usage, and permission details. The default `brief` progress mode sends planning/reasoning, search, and file-change summaries, but suppresses command/tool details. Use `/progress detailed` or `--progress detailed` when full debugging detail is needed.
+Normal messages from the same Weixin context are processed sequentially. If Codex is already running and another normal message arrives, the middleware replies with a queued notice; commands such as `/status`, `/stop`, and approval commands still run immediately. The Weixin channel no longer sends per-task start notices or progress messages. It still sends queued notices, approvals, final replies, errors, media send results, and user-initiated command replies. Weixin-side `/progress` is rejected and does not change delivery mode; `/fff` is a Weixin-only silent refresh command that is not forwarded to Codex.
 
 The Weixin-side `/model` command reads the actual model list from Codex app-server `model/list`; it does not keep a hardcoded catalog. Use `/model` to list models, then `/model gpt-5.5 xhigh` or `/model 2 high` to switch the model and reasoning effort for subsequent turns. Unknown models and unsupported efforts are rejected.
 
-Weixin outbound messages are serialized with a small interval to reduce dropped or hidden rapid-fire progress messages. The default send interval is 1200ms. If `sendmessage` hits rate limiting or a temporary failure, the adapter retries with backoff; only the final failure moves the channel to `degraded` and records `lastError`, instead of logging the request as a successful OUT. While Codex is running, the Weixin channel fetches a `typing_ticket` with `getconfig`, then periodically calls `sendtyping` to keep the peer-side "typing" state visible; it stops typing when the task finishes or `/stop` is used.
+Weixin outbound messages are serialized with a small interval, and Bridge suppresses task-start notices and progress messages for Weixin to reduce outbound volume. The default send interval is 1200ms. If `sendmessage` hits rate limiting or a temporary failure, the adapter retries with backoff; only the final failure moves the channel to `degraded` and records `lastError`, instead of logging the request as a successful OUT. While Codex is running, the Weixin channel fetches a `typing_ticket` with `getconfig`, then periodically calls `sendtyping` to keep the peer-side "typing" state visible; it stops typing when the task finishes or `/stop` is used.
 
-Ordinary messages and progress output never auto-send files or images. Local paths, Markdown images, and `file://` references are left as plain text unless the user starts the turn with `/sendfile <task>`. For that turn, the bridge adds an internal instruction to Codex and only parses final-answer lines using `BRIDGE_SEND_FILE: /absolute/path/to/file`. Up to 3 files are sent per turn, and the protocol lines are hidden from the visible reply. Media failures are reported in one aggregate result instead of one fallback message per file.
+Ordinary messages and intermediate model output never auto-send files or images. Local paths, Markdown images, and `file://` references are left as plain text unless the user starts the turn with `/sendfile <task>`. For that turn, the bridge adds an internal instruction to Codex and only parses final-answer lines using `BRIDGE_SEND_FILE: /absolute/path/to/file`. Up to 3 files are sent per turn, and the protocol lines are hidden from the visible reply. Media failures are reported in one aggregate result instead of one fallback message per file.
 
 ## Weixin Login State
 
@@ -67,18 +67,18 @@ To invalidate Weixin login, stop the middleware and delete the whole `state/weix
 
 - `/help`: show available commands.
 - `/new`: create a new Codex session for the current channel context.
-- `/status`: show the Codex session, model, context token usage, cumulative token usage, bridge queue, approvals, permission mode, progress mode, and channel health.
+- `/status`: show the Codex session, model, context token usage, cumulative token usage, bridge queue, approvals, permission mode, and channel health; Weixin status reports progress as disabled.
 - `/sessions`: list sessions known to the current channel context.
 - `/sessions all` or `/all-sessions`: list all discoverable Codex history session IDs.
 - `/resume <session>` / `/use <session>`: resume and bind a Codex session.
-- `/progress [brief|detailed|silent]`: show or set progress delivery mode for the current channel context.
 - `/sendfile <task>`: let Codex declare final files for this turn through the internal bridge protocol; ordinary messages do not auto-send files.
 - `/model [model|number] [effort]`: list app-server models or switch the model and reasoning effort for subsequent turns.
 - `/permission [approval|full confirm]`: show or switch the permission mode for the currently bound Codex session; without a bound session it changes the default for future new sessions.
 - `/OK`: approve the current Codex approval.
 - `/P`: approve the current Codex approval for the current Codex session, so similar operations should stop asking when supported by Codex.
-- `/NO [reason]`: deny the current Codex approval and record the reason.
+- `/NO`: deny the current Codex approval.
 - `/stop`: stop the currently running Codex task without ending the Codex session.
+- `/fff`: Weixin-only silent refresh command; no reply, no queue entry, and no forwarding to Codex.
 
 ## Documentation
 

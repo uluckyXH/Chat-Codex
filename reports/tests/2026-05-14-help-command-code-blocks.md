@@ -7,7 +7,7 @@
 ## 覆盖内容
 
 - `/help` 输出改为“命令代码块 + 中文说明”的结构。
-- 保留 `/OK`、`/NO [理由]`、`/permission [approval|full confirm]` 等简化审批和权限命令。
+- 保留 `/OK`、`/NO`、`/permission [approval|full confirm]` 等简化审批和权限命令。
 - 更新 Bridge mock 集成测试，验证帮助菜单包含代码块格式的命令。
 
 ## 执行命令

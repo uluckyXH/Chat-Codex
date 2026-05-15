@@ -1,8 +1,8 @@
-# 2026-05-14 `/stop`、`/status`、拒绝理由和微信 typing 测试报告
+# 2026-05-14 `/stop`、`/status`、拒绝审批和微信 typing 测试报告
 
 ## 测试目标
 
-- 验证 `/NO [理由]` 能记录拒绝理由，并向 Codex adapter 传递。
+- 验证 `/NO` 能拒绝当前审批。
 - 验证 `/status` 在 Codex 运行时可以立即返回当前处理状态、队列、turn/task 摘要和 `/stop` 提示。
 - 验证 `/stop` 只终止当前正在处理的 Codex 任务，不结束 Bridge 或 Codex 会话。
 - 验证 `brief` 模式能继续投递计划、自言自语类进度，并兼容更多 Codex JSONL 形态。
@@ -46,7 +46,7 @@ todo 0
 
 新增重点用例：
 
-- `Bridge rejects latest approval with /NO and an optional reason`
+- `Bridge rejects latest approval with /NO`
 - `Bridge sends typing state while Codex is running`
 - `Bridge status reports running work and /stop cancels the current task`
 - `WeixinAdapter sends typing state with getconfig typing ticket`
@@ -55,7 +55,7 @@ todo 0
 
 ## 结果说明
 
-- `/NO 这个命令太危险` 会拒绝当前最新审批并保存理由；带 ID 的 `/deny a001 ...` 仍作为内部兼容能力保留，但不在普通微信提示中暴露。
+- `/NO` 会拒绝当前最新审批；带 ID 的 `/deny a001` 仍作为内部兼容能力保留，但不在普通微信提示中暴露。
 - `/status` 是即时命令，不进入普通消息队列；运行中会显示 `Processing: yes`、`Codex: running ...`、队列数量和 `/stop` 提示。
 - `/stop` 会调用 `CodexAdapter.cancel()`；CLI exec adapter 会对当前 `codex exec` 子进程发送 `SIGTERM`，必要时升级为 `SIGKILL`。
 - Bridge 在 Codex 运行期间调用通道 `sendTyping(true)`，并每 5 秒续发；结束、失败或 `/stop` 后调用 `sendTyping(false)`。

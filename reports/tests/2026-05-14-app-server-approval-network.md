@@ -7,7 +7,7 @@
 ## 覆盖内容
 
 - `AppServerCodexAdapter` 的 `approval + workspace-write` turn sandbox 改为 `networkAccess=true`。
-- 保留 `approvalPolicy=on-request` 和 `approvalsReviewer=user`，命令/文件/权限审批仍由微信 `/OK`、`/NO [理由]` 处理。
+- 保留 `approvalPolicy=on-request` 和 `approvalsReviewer=user`，命令/文件/权限审批仍由微信 `/OK`、`/NO` 处理。
 - 新增 app-server 单测验证 `turn/start` 传入的 `sandboxPolicy.networkAccess` 为 `true`。
 - README 和技术/需求文档补充：app-server approval 模式保留网络访问能力，以对齐本机 Codex CLI 的 `workspace-write` 行为。
 

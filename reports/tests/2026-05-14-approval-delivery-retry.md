@@ -10,7 +10,7 @@
 - 收到 `approval.requested` 后先创建 pending approval，再持续重试发送审批提示。
 - 审批提示会一直重试，直到至少成功送达一次。
 - 如果重试期间用户已经通过 `/OK`、`/NO` 或 `/stop` 处理该审批，重试会停止，避免已处理审批再次弹出。
-- `/status` 在存在 pending approval 时会展示当前审批类型、命令和可复制的 `/OK`、`/NO [理由]` 兜底提示。
+- `/status` 在存在 pending approval 时会展示当前审批类型、命令和可复制的 `/OK`、`/NO` 兜底提示。
 - README 和技术设计补充审批消息必须送达的关键消息语义。
 
 ## 测试

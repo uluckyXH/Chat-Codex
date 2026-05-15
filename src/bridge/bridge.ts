@@ -9,6 +9,8 @@ import { SilentLogger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelAdapter, ChannelMedia, ChannelMessage, ChannelTarget } from "../protocol/channel.js";
 import { replyTargetFromMessage } from "../protocol/channel.js";
+import type { ChannelDeliveryPolicy, ChannelRefreshCommandPolicy } from "../protocol/delivery-policy.js";
+import { DEFAULT_CHANNEL_DELIVERY_POLICY, normalizeChannelDeliveryPolicy, normalizeDeliveryCommandName } from "../protocol/delivery-policy.js";
 import { MemoryStateStore } from "../state/memory-state-store.js";
 import { BRIDGE_SEND_FILE_PREFIX, extractBridgeSendFileRefs, stripBridgeSendFileRefs } from "./media-extractor.js";
 
@@ -105,9 +107,22 @@ export class Bridge {
     args: string[],
     rawText: string,
   ): Promise<void> {
+    const deliveryPolicy = this.deliveryPolicyFor(message);
+    const refreshCommand = this.refreshCommandFor(deliveryPolicy, name);
+    if (refreshCommand) {
+      this.logger.info("channel refresh command received", {
+        channel: this.channel.id,
+        command: refreshCommand.command,
+        routeKey: message.routeKey,
+      });
+      if (!refreshCommand.silent) {
+        await this.sendText(target, refreshCommand.replyText ?? "已刷新。");
+      }
+      return;
+    }
     switch (name) {
       case "help":
-        await this.sendText(target, this.helpText());
+        await this.sendText(target, this.helpText(message));
         return;
       case "new":
         await this.createNewSession(message, target);
@@ -133,6 +148,10 @@ export class Bridge {
         return;
       case "progress":
       case "mode":
+        if (deliveryPolicy.progressCommand === "disabled") {
+          await this.sendText(target, deliveryPolicy.progressDisabledMessage ?? "当前渠道已禁用进度投递，/progress 不可用。");
+          return;
+        }
         await this.handleProgressModeCommand(message, target, args[0]);
         return;
       case "sendfile":
@@ -158,7 +177,7 @@ export class Bridge {
         await this.resolveApproval(message, target, args, "approve-session");
         return;
       case "no":
-        await this.resolveApproval(message, target, args, "deny");
+        await this.resolveApproval(message, target, [], "deny");
         return;
       case "approve":
         await this.resolveApproval(message, target, args, "approve");
@@ -260,12 +279,15 @@ export class Bridge {
     sendFile: boolean,
   ): Promise<void> {
     const session = await this.ensureSession(message);
-    await this.sendText(target, [
-      "Codex 正在处理这条消息。",
-      "可发送 /status 查看状态，/stop 终止。",
-      sendFile ? "本轮已启用 /sendfile，只会发送最终回复中明确声明的文件。" : undefined,
-      remainingQueued > 0 ? `Queue: 后面还有 ${remainingQueued} 条` : undefined,
-    ].filter(Boolean).join("\n"));
+    const deliveryPolicy = this.deliveryPolicyFor(message);
+    if (deliveryPolicy.taskStart === "send") {
+      await this.sendText(target, [
+        "Codex 正在处理这条消息。",
+        "可发送 /status 查看状态，/stop 终止。",
+        sendFile ? "本轮已启用 /sendfile，只会发送最终回复中明确声明的文件。" : undefined,
+        remainingQueued > 0 ? `Queue: 后面还有 ${remainingQueued} 条` : undefined,
+      ].filter(Boolean).join("\n"));
+    }
     await this.withTyping(target, async () => {
       let finalText = "";
       const codexPrompt = sendFile ? withSendFileInstruction(prompt) : prompt;
@@ -277,7 +299,7 @@ export class Bridge {
             task: truncateForChannel(prompt, 120),
           });
         } else if (event.type === "assistant.progress") {
-          if (this.shouldDeliverProgress(message.routeKey, event.kind)) {
+          if (this.shouldDeliverProgressWithPolicy(deliveryPolicy, message.routeKey, event.kind)) {
             await this.sendProgressText(message.routeKey, target, `Codex 进度:\n${truncateForChannel(event.text)}`);
           }
         } else if (event.type === "assistant.delta") {
@@ -332,39 +354,29 @@ export class Bridge {
     args: string[],
     decision: ApprovalDecision,
   ): Promise<void> {
-    const parsed = this.parseApprovalArgs(message.routeKey, args, decision);
+    const parsed = this.parseApprovalArgs(message.routeKey, args);
     const key = parsed.approvalKey ?? this.approvals.latest(message.routeKey)?.approvalKey;
     if (!key) {
       await this.sendText(target, "当前没有待处理审批。");
       return;
     }
     try {
-      const pending = this.approvals.decide(key, message.routeKey, decision, parsed.reason);
-      await this.codex.resolveApproval?.(pending.adapterApprovalId ?? pending.approvalKey, decision, parsed.reason);
-      await this.sendText(target, [
-        `审批已处理: ${formatApprovalDecision(decision)}`,
-        parsed.reason ? `理由: ${parsed.reason}` : undefined,
-      ].filter(Boolean).join("\n"));
+      const pending = this.approvals.decide(key, message.routeKey, decision);
+      await this.codex.resolveApproval?.(pending.adapterApprovalId ?? pending.approvalKey, decision);
+      await this.sendText(target, `审批已处理: ${formatApprovalDecision(decision)}`);
     } catch (error) {
       await this.sendText(target, error instanceof Error ? error.message : String(error));
     }
   }
 
-  private parseApprovalArgs(routeKey: string, args: string[], decision: ApprovalDecision): {
+  private parseApprovalArgs(routeKey: string, args: string[]): {
     approvalKey?: string;
-    reason?: string;
   } {
     if (args.length === 0) return {};
-    const [first = "", ...rest] = args;
+    const [first = ""] = args;
     const knownApproval = this.approvals.get(first);
     if (knownApproval?.routeKey === routeKey) {
-      return {
-        approvalKey: first,
-        reason: decision === "deny" ? rest.join(" ").trim() || undefined : undefined,
-      };
-    }
-    if (decision === "deny") {
-      return { reason: args.join(" ").trim() || undefined };
+      return { approvalKey: first };
     }
     return { approvalKey: first };
   }
@@ -748,12 +760,13 @@ export class Bridge {
     const policyStatus = this.runPolicyStatus(binding?.sessionId);
     const policy = policyStatus?.policy ?? this.codex.getRunPolicy?.(binding?.sessionId);
     const modelPolicy = this.codex.getModelPolicy?.(binding?.sessionId);
+    const deliveryPolicy = this.deliveryPolicyFor(message);
     return [
       "**Codex 状态**",
       `- Session: \`${binding?.sessionId ?? "none"}\``,
       `- State: \`${formatCodexStatus(sessionStatus)}\``,
       `- Model: ${formatModelInfo(sessionStatus.model)}`,
-      `- Context: ${formatContextUsage(sessionStatus.context)}`,
+      ...formatContextUsageLines(sessionStatus.context),
       binding ? `- Cwd: \`${localSession?.session.cwd ?? "unknown"}\`` : undefined,
       "",
       "**Bridge**",
@@ -761,7 +774,7 @@ export class Bridge {
       `- Queue: \`${this.routeQueues.get(routeKey)?.length ?? 0}\``,
       `- Pending approvals: \`${approvals.length}\``,
       ...formatPendingApprovalStatus(approvals.at(-1)),
-      `- Progress: \`${this.progressModeFor(routeKey)}\``,
+      this.progressStatusLine(routeKey, deliveryPolicy),
       modelPolicy ? `- Model override: ${formatModelPolicy(modelPolicy)}` : undefined,
       policy ? `- Permission: \`${formatRunPolicy(policy)}\`` : undefined,
       policyStatus && !policyStatus.interactiveApprovals ? `- Approval: \`${formatApprovalSupport(policyStatus)}\`` : undefined,
@@ -826,7 +839,8 @@ export class Bridge {
     ].join("\n");
   }
 
-  private helpText(): string {
+  private helpText(message?: ChannelMessage): string {
+    const deliveryPolicy = this.deliveryPolicyFor(message);
     const commands: Array<[command: string, description: string]> = [
       ["/help", "查看命令"],
       ["/new", "创建新 Codex 会话"],
@@ -843,13 +857,19 @@ export class Bridge {
       ["/permission [approval|full confirm]", "查看或切换当前绑定 Codex session 的权限模式"],
       ["/OK", "批准当前审批"],
       ["/P", "按当前会话批准审批，后续同类操作尽量不再询问"],
-      ["/NO [理由]", "拒绝当前审批"],
+      ["/NO", "拒绝当前审批"],
       ["/stop", "终止当前正在处理的 Codex 任务"],
+    ];
+    const visibleCommands = [
+      ...(deliveryPolicy.progressCommand === "disabled"
+        ? commands.filter(([command]) => !command.startsWith("/progress"))
+        : commands),
+      ...deliveryPolicy.refreshCommands.map((command): [string, string] => [`/${command.command}`, command.description]),
     ];
     return [
       "**可用命令**",
       "",
-      ...commands.flatMap(([command, description]) => [
+      ...visibleCommands.flatMap(([command, description]) => [
         `\`\`\`text\n${command}\n\`\`\``,
         description,
         "",
@@ -859,6 +879,37 @@ export class Bridge {
 
   private progressModeFor(routeKey: string): ProgressDeliveryMode {
     return this.routeProgressModes.get(routeKey) ?? this.defaultProgressMode;
+  }
+
+  private deliveryPolicyFor(message: ChannelMessage | undefined): ChannelDeliveryPolicy {
+    return normalizeChannelDeliveryPolicy(this.channel.getDeliveryPolicy?.(message) ?? DEFAULT_CHANNEL_DELIVERY_POLICY);
+  }
+
+  private refreshCommandFor(
+    policy: ChannelDeliveryPolicy,
+    commandName: string,
+  ): ChannelRefreshCommandPolicy | undefined {
+    const normalized = normalizeDeliveryCommandName(commandName);
+    return policy.refreshCommands.find((command) => normalizeDeliveryCommandName(command.command) === normalized);
+  }
+
+  private shouldDeliverProgressWithPolicy(
+    policy: ChannelDeliveryPolicy,
+    routeKey: string,
+    kind: CodexProgressKind | undefined,
+  ): boolean {
+    if (policy.progress === "suppress") return false;
+    return this.shouldDeliverProgress(routeKey, kind);
+  }
+
+  private progressStatusLine(routeKey: string, policy: ChannelDeliveryPolicy): string {
+    if (policy.progress === "suppress") {
+      const label = policy.statusProgressLabel ?? "disabled";
+      const detail = policy.statusProgressDescription ? ` (${policy.statusProgressDescription})` : "";
+      return `- Progress: \`${label}\`${detail}`;
+    }
+    const suffix = policy.progress === "aggregate" ? " policy=`aggregate`" : "";
+    return `- Progress: \`${this.progressModeFor(routeKey)}\`${suffix}`;
   }
 
   private shouldDeliverProgress(routeKey: string, kind: CodexProgressKind | undefined): boolean {
@@ -977,18 +1028,18 @@ function formatApprovalSupport(status: CodexRunPolicyStatus): string {
   return status.effectiveApprovalPolicy ? `not interactive effective=${status.effectiveApprovalPolicy}` : "not interactive";
 }
 
-function formatContextUsage(context: CodexSessionContextUsage | undefined): string {
-  if (!context) return "`unavailable`";
+function formatContextUsageLines(context: CodexSessionContextUsage | undefined): string[] {
+  if (!context) return ["- Context: `unavailable`"];
   const current = context.last.totalTokens;
   const window = context.modelContextWindow;
-  const usage = window && window > 0
+  const contextUsage = window && window > 0
     ? `\`${formatNumber(current)} / ${formatNumber(window)} tokens\` (${formatPercent(current / window)}, remaining ${formatNumber(Math.max(window - current, 0))})`
     : `\`${formatNumber(current)} tokens\``;
   return [
-    usage,
-    `(last turn input ${formatNumber(context.last.inputTokens)}, cached ${formatNumber(context.last.cachedInputTokens)}, output ${formatNumber(context.last.outputTokens)}, reasoning output ${formatNumber(context.last.reasoningOutputTokens)})`,
-    `total usage \`${formatNumber(context.total.totalTokens)} tokens\``,
-  ].join(" ");
+    `- Context: ${contextUsage}`,
+    `- Last turn tokens: input \`${formatNumber(context.last.inputTokens)}\`, cached \`${formatNumber(context.last.cachedInputTokens)}\`, output \`${formatNumber(context.last.outputTokens)}\`, reasoning output \`${formatNumber(context.last.reasoningOutputTokens)}\``,
+    `- Session API usage: total \`${formatNumber(context.total.totalTokens)}\`, input \`${formatNumber(context.total.inputTokens)}\`, cached \`${formatNumber(context.total.cachedInputTokens)}\`, output \`${formatNumber(context.total.outputTokens)}\`, reasoning output \`${formatNumber(context.total.reasoningOutputTokens)}\``,
+  ];
 }
 
 function formatModelInfo(model: CodexSessionModelInfo | undefined): string {
@@ -1198,7 +1249,7 @@ function formatPendingApprovalStatus(approval: PendingApproval | undefined): Arr
     approval.command ? "```shell\n" + approval.command + "\n```" : undefined,
     "```text\n/OK\n```",
     "```text\n/P\n```",
-    "```text\n/NO [理由]\n```",
+    "```text\n/NO\n```",
   ];
 }
 

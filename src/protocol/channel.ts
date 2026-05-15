@@ -1,3 +1,5 @@
+import type { ChannelDeliveryPolicy } from "./delivery-policy.js";
+
 export type ChannelLoginMode = "none" | "qr" | "token" | "external";
 
 export type ChannelState =
@@ -113,6 +115,7 @@ export interface ChannelAdapter {
   login?(): Promise<ChannelLoginResult>;
   getStatus(): Promise<ChannelStatus>;
   getCapabilities(): ChannelCapabilities;
+  getDeliveryPolicy?(message?: ChannelMessage): ChannelDeliveryPolicy;
   onMessage(handler: ChannelMessageHandler): void;
   sendText(target: ChannelTarget, text: string, options?: SendOptions): Promise<SendResult>;
   sendMedia?(target: ChannelTarget, media: ChannelMedia, options?: SendOptions): Promise<SendResult>;

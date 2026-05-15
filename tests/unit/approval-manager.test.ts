@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ApprovalManager } from "../../src/approvals/approval-manager.js";
 
 test("ApprovalManager creates and resolves approvals", () => {
-  const manager = new ApprovalManager({ ttlMs: 60_000 });
+  const manager = new ApprovalManager();
   const pending = manager.create("mock:default:direct:user", "user", {
     kind: "command",
     sessionId: "s1",
@@ -13,9 +13,10 @@ test("ApprovalManager creates and resolves approvals", () => {
   });
 
   assert.equal(pending.status, "pending");
+  assert.equal(pending.expiresAt, undefined);
   assert.match(manager.formatForChannel(pending), /\/OK/);
   assert.match(manager.formatForChannel(pending), /\/P 本会话通过/);
-  assert.match(manager.formatForChannel(pending), /\/NO \[理由]/);
+  assert.match(manager.formatForChannel(pending), /\/NO 拒绝当前审批/);
   assert.doesNotMatch(manager.formatForChannel(pending), new RegExp(pending.approvalKey));
   assert.doesNotMatch(manager.formatForChannel(pending), /\/approve/);
   assert.equal(manager.latest(pending.routeKey)?.approvalKey, pending.approvalKey);
@@ -25,8 +26,8 @@ test("ApprovalManager creates and resolves approvals", () => {
   assert.equal(resolved.decision, "approve");
 });
 
-test("ApprovalManager stores deny reasons", () => {
-  const manager = new ApprovalManager({ ttlMs: 60_000 });
+test("ApprovalManager only expires approvals when ttl is configured", () => {
+  const manager = new ApprovalManager({ ttlMs: -1 });
   const pending = manager.create("route-a", "user", {
     kind: "command",
     sessionId: "s1",
@@ -34,10 +35,8 @@ test("ApprovalManager stores deny reasons", () => {
     itemId: "i1",
   });
 
-  const resolved = manager.decide(pending.approvalKey, pending.routeKey, "deny", "命令太危险");
-
-  assert.equal(resolved.decision, "deny");
-  assert.equal(resolved.decisionReason, "命令太危险");
+  assert.equal(manager.latest("route-a"), undefined);
+  assert.equal(manager.get(pending.approvalKey)?.status, "expired");
 });
 
 test("ApprovalManager latest returns the newest pending approval for a route", () => {

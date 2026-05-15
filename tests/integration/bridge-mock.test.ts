@@ -6,6 +6,7 @@ import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
 import type { CodexAdapter, CodexEvent, CodexSession, CodexSessionContextUsage, CodexSessionStatus, CodexSessionSummary, StartSessionInput } from "../../src/codex/types.js";
 import type { TranscriptSink } from "../../src/logging/transcript.js";
 import type { ChannelMedia, ChannelMessage, ChannelTarget, SendResult } from "../../src/protocol/channel.js";
+import type { ChannelDeliveryPolicy } from "../../src/protocol/delivery-policy.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,6 +37,42 @@ class ProgressCodexAdapter extends MockCodexAdapter {
     yield { type: "assistant.progress", sessionId, turnId, kind: "command", text: "正在执行命令: npm test" };
     yield { type: "assistant.completed", sessionId, turnId, text: "完成" };
     yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class FailedTurnCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = `failed-turn-${Date.now()}`;
+    yield { type: "turn.started", sessionId, turnId };
+    yield { type: "turn.failed", sessionId, turnId, error: "模拟失败" };
+  }
+}
+
+class WeixinIdOnlyChannelAdapter extends MockChannelAdapter {
+  override readonly id = "weixin";
+  override readonly label = "Weixin-id-only Channel";
+}
+
+class WeixinLikeChannelAdapter extends MockChannelAdapter {
+  override readonly id = "weixin";
+  override readonly label = "Weixin-like Channel";
+
+  override getDeliveryPolicy(): ChannelDeliveryPolicy {
+    return {
+      taskStart: "suppress",
+      progress: "suppress",
+      progressCommand: "disabled",
+      progressDisabledMessage: "微信渠道已禁用进度投递，/progress 在微信中不可用。",
+      statusProgressLabel: "disabled",
+      statusProgressDescription: "微信渠道不投递进度",
+      refreshCommands: [
+        {
+          command: "fff",
+          description: "微信专用静默刷新命令，不发送回复",
+          silent: true,
+        },
+      ],
+    };
   }
 }
 
@@ -265,7 +302,7 @@ test("Bridge handles new session, prompt, status, and approval over mock channel
   assert.equal(/\[a[0-9a-z]+]/.test(approvalMessage.text), false, "approval id should not be exposed in normal channel prompt");
   assert.ok(approvalMessage.text.includes("/OK 通过当前审批"));
   assert.ok(approvalMessage.text.includes("/P 本会话通过"));
-  assert.ok(approvalMessage.text.includes("/NO [理由] 拒绝当前审批"));
+  assert.ok(approvalMessage.text.includes("/NO 拒绝当前审批"));
 
   await channel.emitText("/OK 好的");
   await bridge.waitForIdle();
@@ -305,7 +342,7 @@ test("Bridge exposes all sessions command for channel users", async () => {
   assert.ok(help.includes("批准当前审批"));
   assert.ok(help.includes("```text\n/P\n```"));
   assert.ok(help.includes("按当前会话批准审批"));
-  assert.ok(help.includes("```text\n/NO [理由]\n```"));
+  assert.ok(help.includes("```text\n/NO\n```"));
   assert.ok(help.includes("拒绝当前审批"));
   assert.ok(help.includes("```text\n/permission [approval|full confirm]\n```"));
   assert.equal(help.includes("/approve [id]"), false);
@@ -331,8 +368,8 @@ test("Bridge status includes session token context without channel identity deta
   assert.match(statusMessage, /Session: `mock-codex-1`/);
   assert.match(statusMessage, /Model: `gpt-test` provider=`openai` tier=`default` effort=`high`/);
   assert.match(statusMessage, /Context: `164,171 \/ 258,400 tokens` \(63\.5%, remaining 94,229\)/);
-  assert.match(statusMessage, /last turn input 160,000, cached 120,000, output 4,171, reasoning output 1,200/);
-  assert.match(statusMessage, /total usage `34,375,973 tokens`/);
+  assert.match(statusMessage, /Last turn tokens: input `160,000`, cached `120,000`, output `4,171`, reasoning output `1,200`/);
+  assert.match(statusMessage, /Session API usage: total `34,375,973`, input `34,282,029`, cached `33,213,184`, output `93,944`, reasoning output `30,181`/);
   assert.doesNotMatch(statusMessage, /13303\.4%/);
   assert.doesNotMatch(statusMessage, /mock:mock-account:direct:project-room/);
   assert.doesNotMatch(statusMessage, /Mock User \(alice\)/);
@@ -412,7 +449,7 @@ test("Bridge does not crash when channel text delivery fails", async () => {
   assert.ok(channel.sentAttempts >= 3);
 });
 
-test("Bridge rejects latest approval with /NO and an optional reason", async () => {
+test("Bridge rejects latest approval with /NO", async () => {
   const channel = new MockChannelAdapter();
   const codex = new MockCodexAdapter();
   const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
@@ -429,8 +466,7 @@ test("Bridge rejects latest approval with /NO and an optional reason", async () 
   assert.equal(codex.resolvedApprovals.length, 1);
   assert.match(codex.resolvedApprovals[0].approvalKey, /^a[0-9a-z]+$/);
   assert.equal(codex.resolvedApprovals[0].decision, "deny");
-  assert.equal(codex.resolvedApprovals[0].reason, "这个命令会删除文件");
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("理由: 这个命令会删除文件")));
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("理由: 这个命令会删除文件")), false);
 });
 
 test("Bridge resolves approvals with adapter approval ids when provided", async () => {
@@ -496,7 +532,7 @@ test("Bridge stops retrying approval notification after approval is resolved", a
   assert.ok(statusMessage.includes("**Pending Approval**"));
   assert.ok(statusMessage.includes("```text\n/OK\n```"));
   assert.ok(statusMessage.includes("```text\n/P\n```"));
-  assert.ok(statusMessage.includes("```text\n/NO [理由]\n```"));
+  assert.ok(statusMessage.includes("```text\n/NO\n```"));
   await channel.emitText("/OK");
   await bridge.waitForIdle();
   await bridge.stop();
@@ -632,6 +668,91 @@ test("Bridge progress command enables detailed progress for the current route", 
 
   assert.ok(channel.sentMessages.some((message) => message.text.includes("当前模式: `detailed`")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("正在执行命令: npm test")));
+});
+
+test("Bridge suppresses task start and progress on weixin while keeping final replies", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new ProgressCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("跑一个带进度的任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  const texts = channel.sentMessages.map((message) => message.text);
+  assert.equal(texts.some((text) => text.includes("Codex 正在处理这条消息")), false);
+  assert.equal(texts.some((text) => text.startsWith("Codex 进度:")), false);
+  assert.ok(texts.some((text) => text === "完成"));
+});
+
+test("Bridge uses delivery policy instead of channel id for progress suppression", async () => {
+  const channel = new WeixinIdOnlyChannelAdapter();
+  const codex = new ProgressCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("跑一个带进度的任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  const texts = channel.sentMessages.map((message) => message.text);
+  assert.ok(texts.some((text) => text.includes("Codex 正在处理这条消息")));
+  assert.ok(texts.some((text) => text.includes("我先列一个简短计划")));
+});
+
+test("Bridge still sends errors on weixin when progress is disabled", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new FailedTurnCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("跑一个失败任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("Codex 正在处理这条消息")), false);
+  assert.ok(channel.sentMessages.some((message) => message.text === "Codex 执行失败: 模拟失败"));
+});
+
+test("Bridge rejects progress command and silently accepts /fff on weixin", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new MockCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/progress detailed");
+  await channel.emitText("/fff");
+  await bridge.stop();
+
+  assert.equal(channel.sentMessages.length, 1);
+  assert.match(channel.sentMessages[0].text, /微信渠道已禁用进度投递/);
+});
+
+test("Bridge reports progress disabled in weixin status", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new MockCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/status");
+  await bridge.stop();
+
+  assert.match(channel.sentMessages[0].text, /Progress: `disabled`/);
+});
+
+test("Bridge hides progress command and shows /fff in weixin help", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new MockCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/help");
+  await bridge.stop();
+
+  const help = channel.sentMessages[0].text;
+  assert.equal(help.includes("```text\n/progress [brief|detailed|silent]\n```"), false);
+  assert.ok(help.includes("```text\n/fff\n```"));
 });
 
 test("Bridge suppresses progress sends briefly after a channel progress failure", async () => {

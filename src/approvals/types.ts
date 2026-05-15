@@ -21,7 +21,7 @@ export interface PendingApproval extends ApprovalRequest {
   routeKey: string;
   requestedBy: string;
   requestedAt: string;
-  expiresAt: string;
+  expiresAt?: string;
   status: "pending" | "resolved" | "expired";
   decision?: ApprovalDecision;
   decisionReason?: string;

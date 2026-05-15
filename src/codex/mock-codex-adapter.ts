@@ -22,7 +22,7 @@ export class MockCodexAdapter implements CodexAdapter {
   private defaultModelPolicy: CodexModelPolicy = {};
   private readonly sessionModelPolicies = new Map<string, CodexModelPolicy>();
   private readonly sessions = new Map<string, { session: CodexSession; routeKey: string; status: CodexSessionStatus }>();
-  readonly resolvedApprovals: Array<{ approvalKey: string; decision: ApprovalDecision; reason?: string }> = [];
+  readonly resolvedApprovals: Array<{ approvalKey: string; decision: ApprovalDecision }> = [];
 
   async startSession(input: StartSessionInput): Promise<CodexSession> {
     this.sequence += 1;
@@ -99,11 +99,10 @@ export class MockCodexAdapter implements CodexAdapter {
       }));
   }
 
-  async resolveApproval(approvalKey: string, decision: ApprovalDecision, reason?: string): Promise<void> {
+  async resolveApproval(approvalKey: string, decision: ApprovalDecision): Promise<void> {
     this.resolvedApprovals.push({
       approvalKey,
       decision,
-      ...(reason ? { reason } : {}),
     });
   }
 

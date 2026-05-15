@@ -1,16 +1,16 @@
 import type { ApprovalDecision, ApprovalRequest, PendingApproval } from "./types.js";
 
 export interface ApprovalManagerOptions {
-  ttlMs?: number;
+  ttlMs?: number | null;
 }
 
 export class ApprovalManager {
   private readonly approvals = new Map<string, PendingApproval>();
   private sequence = 0;
-  private readonly ttlMs: number;
+  private readonly ttlMs?: number;
 
   constructor(options: ApprovalManagerOptions = {}) {
-    this.ttlMs = options.ttlMs ?? 10 * 60 * 1000;
+    this.ttlMs = typeof options.ttlMs === "number" ? options.ttlMs : undefined;
   }
 
   create(routeKey: string, requestedBy: string, request: ApprovalRequest): PendingApproval {
@@ -22,7 +22,7 @@ export class ApprovalManager {
       routeKey,
       requestedBy,
       requestedAt: now.toISOString(),
-      expiresAt: new Date(now.getTime() + this.ttlMs).toISOString(),
+      ...(this.ttlMs !== undefined ? { expiresAt: new Date(now.getTime() + this.ttlMs).toISOString() } : {}),
       status: "pending",
     };
     this.approvals.set(approvalKey, pending);
@@ -46,7 +46,7 @@ export class ApprovalManager {
     return this.list(routeKey).at(-1);
   }
 
-  decide(approvalKey: string, routeKey: string, decision: ApprovalDecision, reason?: string): PendingApproval {
+  decide(approvalKey: string, routeKey: string, decision: ApprovalDecision): PendingApproval {
     this.expireOld();
     const pending = this.approvals.get(approvalKey);
     if (!pending) {
@@ -60,7 +60,6 @@ export class ApprovalManager {
     }
     pending.status = "resolved";
     pending.decision = decision;
-    pending.decisionReason = reason?.trim() || undefined;
     this.approvals.set(approvalKey, pending);
     return pending;
   }
@@ -95,15 +94,16 @@ export class ApprovalManager {
       "快捷回复:",
       "/OK 通过当前审批",
       "/P 本会话通过，后续同类操作尽量不再询问",
-      "/NO [理由] 拒绝当前审批",
+      "/NO 拒绝当前审批",
     );
     return lines.join("\n");
   }
 
   private expireOld(): void {
+    if (this.ttlMs === undefined) return;
     const now = Date.now();
     for (const approval of this.approvals.values()) {
-      if (approval.status === "pending" && Date.parse(approval.expiresAt) <= now) {
+      if (approval.status === "pending" && approval.expiresAt && Date.parse(approval.expiresAt) <= now) {
         approval.status = "expired";
         this.approvals.set(approval.approvalKey, approval);
       }

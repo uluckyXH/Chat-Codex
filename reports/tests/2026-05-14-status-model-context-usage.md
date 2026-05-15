@@ -9,7 +9,7 @@
 - `AppServerCodexAdapter` 从 `thread/start`、`thread/resume` response 保存 model、provider、service tier。
 - `/status` 增加 `Model` 行。
 - `/status` 的 `Context` 改用 `tokenUsage.last` 近似当前窗口占用，避免把累计 token 显示成超过上下文窗口的百分比。
-- `tokenUsage.total` 仍保留展示，但改为 `total usage` 累计用量。
+- `tokenUsage.total` 仍保留展示，但改为 `Session API usage` 累计用量。
 - Bridge mock 集成测试覆盖超大累计 token 不再显示为 13000% 这类误导性窗口占用。
 
 ## 执行命令

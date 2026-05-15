@@ -2,14 +2,14 @@
 
 ## 背景
 
-`/status` 已经显示模型和上下文 token，但缺少 app-server 返回的 `reasoningEffort`。同时 token 明细里的 `output` 容易被误读为会话累计输出；实际上该值来自 app-server `thread/tokenUsage/updated` 的 `tokenUsage.last.outputTokens`，表示最近一次 token usage 更新里的输出 token。
+`/status` 已经显示模型和上下文 token，但缺少 app-server 返回的 `reasoningEffort`。同时 token 明细里的 `output` 容易被误读为会话累计输出；实际上最近一轮输出来自 app-server `thread/tokenUsage/updated` 的 `tokenUsage.last.outputTokens`，累计输出来自 `tokenUsage.total.outputTokens`。
 
 ## 本轮变更
 
 - `CodexSessionModelInfo` 增加 `reasoningEffort`。
 - `AppServerCodexAdapter` 从 `thread/start`、`thread/resume` 响应读取 `reasoningEffort`。
 - `/status` 的 `Model` 行增加 `effort=...`；当 app-server 返回 `null` 时展示为 `effort=default`。
-- `/status` token 明细从 `last input ... output ... reasoning ...` 改成 `last turn input ... output ... reasoning output ...`，避免和累计输出混淆。
+- `/status` token 明细拆成 `Last turn tokens` 和 `Session API usage`，分别展示最近一轮 output 和累计 output，避免混淆。
 - 需求文档和技术设计里的 `/status` 示例同步更新。
 
 ## 测试

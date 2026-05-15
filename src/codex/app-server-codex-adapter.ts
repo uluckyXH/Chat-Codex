@@ -344,7 +344,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       policy: cloneRunPolicy(policy),
       interactiveApprovals: policy.permissionMode !== "full",
       effectiveApprovalPolicy: policy.permissionMode === "full" ? "never" : "on-request",
-      note: "codex app-server 会把审批请求回调给中间件，可通过微信 /OK、/P 或 /NO [理由] 处理。",
+      note: "codex app-server 会把审批请求回调给中间件，可通过微信 /OK、/P 或 /NO 处理。",
     };
   }
 
