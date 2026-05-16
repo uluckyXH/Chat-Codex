@@ -28,6 +28,9 @@
 - `multi-channel-design.zh-CN.md`
   多渠道接入与会话绑定设计。说明多渠道同时对话、routeKey、session 唯一归属、ChannelRegistry、并发模型和后续实施顺序。
 
+- `local-state-persistence.zh-CN.md`
+  本地文件持久化设计。说明渠道实例、账号目录、route/session 绑定、session owner 全局唯一约束和第一阶段 JSON 文件落地路径。
+
 - `cli-interaction-redesign.zh-CN.md`
   CLI 交互重设计。说明 `weixin codex` / `cli:serve` 应先管理渠道、再管理聊天绑定和 Codex 默认设置，并记录首个 route 绑定 session 的语义修复方案。
 
@@ -88,11 +91,12 @@ secrets/feishu.local.md
 2. 读 `technical-design.zh-CN.md`，确认架构和分阶段路线。
 3. 读 `channel-delivery-policy.zh-CN.md`，确认不同渠道的消息投递策略边界。
 4. 读 `multi-channel-design.zh-CN.md`，确认多渠道 route/session 绑定、并发和配置交互设计。
-5. 读 `cli-interaction-redesign.zh-CN.md`，确认 CLI 首页、子模式、返回/退出和首个 route 绑定语义。
-6. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
-7. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
-8. Agent 继续读 `agent-guide.zh-CN.md`，确认执行规范。
-9. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
+5. 读 `local-state-persistence.zh-CN.md`，确认本地文件持久化、渠道账号目录和 session owner 约束。
+6. 读 `cli-interaction-redesign.zh-CN.md`，确认 CLI 首页、子模式、返回/退出和首个 route 绑定语义。
+7. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
+8. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
+9. Agent 继续读 `agent-guide.zh-CN.md`，确认执行规范。
+10. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
 
 ## 分阶段工作顺序
 
