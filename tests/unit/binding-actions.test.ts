@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { BindingActions } from "../../src/cli/actions/binding-actions.js";
+import { BindingActions, formatOwnerRouteLabel } from "../../src/cli/actions/binding-actions.js";
 import type { DiscoveredCodexSession } from "../../src/codex/codex-cli.js";
 import type { ChannelMessage } from "../../src/protocol/channel.js";
 import { FileStateStore } from "../../src/state/file-state-store.js";
@@ -32,6 +32,7 @@ test("BindingActions lists selectable sessions and excludes sessions owned by an
   assert.deepEqual(choices.selectable.map((choice) => choice.id), ["session-free"]);
   assert.deepEqual(choices.unavailable.map((choice) => choice.id), ["session-owned"]);
   assert.equal(choices.unavailable[0].ownerLabel, "飞书 / default / 李四");
+  assert.equal(formatOwnerRouteLabel(state, secondRoute), "飞书 / default / 李四");
   const text = actions.formatSessionChoices(firstRoute, choices);
   assert.match(text, /1\. 可用/);
   assert.match(text, /m\. 手动输入 Session ID/);

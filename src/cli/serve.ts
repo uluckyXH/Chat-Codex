@@ -25,7 +25,7 @@ import { resolveNewSessionWorkdir } from "../codex/workdir.js";
 import { ConsoleLogger } from "../logging/logger.js";
 import { ConsoleTranscriptSink } from "../logging/transcript.js";
 import type { ChannelLoginResult, ChannelStatus } from "../protocol/channel.js";
-import { BindingActions, formatRunPolicyForUser, type BindingSummary, type SessionChoices } from "./actions/binding-actions.js";
+import { BindingActions, formatOwnerRouteLabel, formatRunPolicyForUser, type BindingSummary, type SessionChoices } from "./actions/binding-actions.js";
 import { ChannelActions, formatManagedChannelList, type ManagedChannelSummary } from "./actions/channel-actions.js";
 import { FileStateStore } from "../state/file-state-store.js";
 import { pendingBindingOwnerRouteKey } from "../state/memory-state-store.js";
@@ -442,9 +442,9 @@ async function configureWeixinPrimaryBinding(
   const pendingId = weixinPrimaryPendingId(channel.id, accountId);
   const pendingOwner = pendingBindingOwnerRouteKey(pendingId);
   for (;;) {
-    const sessions = discoverCodexSessions({ limit: 15 });
+    const choices = new BindingActions(state, { cwd: startup.cwd, sessionLimit: 15 }).listSessionChoices(pendingOwner);
     console.log("");
-    console.log([
+    const lines = [
       "微信主聊天绑定",
       "",
       `账号: ${accountId}`,
@@ -452,13 +452,22 @@ async function configureWeixinPrimaryBinding(
       "",
       "请选择这个微信主聊天使用哪个 Codex session：",
       "",
-      ...sessions.map((session, index) => `  ${index + 1}. ${formatCodexSessionTitleForDisplay(session, 28) ?? session.id}    ${shortSessionId(session.id)}`),
+      ...(choices.selectable.length > 0
+        ? choices.selectable.map((session, index) => `  ${index + 1}. ${session.title ?? session.id}    ${session.shortId}`)
+        : ["  暂无可选历史 session"]),
       "",
       "操作:",
       "  n. 新建 Codex session",
       "  m. 手动输入 Session ID",
       "  0. 暂不绑定，首条消息自动创建",
-    ].join("\n"));
+    ];
+    if (choices.unavailable.length > 0) {
+      lines.push("", "不可选（已绑定其他聊天）:");
+      for (const session of choices.unavailable) {
+        lines.push(`  已绑定到 ${session.ownerLabel}    ${session.title ?? session.id}    ${session.shortId}`);
+      }
+    }
+    console.log(lines.join("\n"));
     const answer = (await rl.question("请选择 session 编号 / 操作 [0]: ")).trim();
     if (!answer || answer === "0" || isBackText(answer)) {
       state.clearPendingBindingForMessage(pendingProbeMessage(channel.id, accountId));
@@ -477,16 +486,16 @@ async function configureWeixinPrimaryBinding(
       console.log("已设置：收到第一条微信私聊后创建新 session。");
       return;
     }
-    const sessionId = await resolveWeixinPrimarySessionId(rl, answer, sessions);
+    const sessionId = await resolveWeixinPrimarySessionId(rl, answer, choices);
     if (!sessionId) continue;
-    const session = sessions.find((item) => item.id === sessionId) ?? findCodexSessionById(sessionId);
+    const session = findCodexSessionById(sessionId);
     if (!session) {
       console.log("没有找到这个 session。请重新输入编号或有效 Session ID；输入 0 返回。");
       continue;
     }
     const owner = state.getSessionOwner(session.id);
     if (owner && owner.ownerRouteKey !== pendingOwner) {
-      console.log(`无法预留这个 session：${session.id} 已绑定到 ${owner.ownerRouteKey}。`);
+      console.log(`无法预留这个 session：${session.id} 已绑定到 ${formatOwnerRouteLabel(state, owner.ownerRouteKey)}。请先到“聊天绑定”里解绑原聊天，或选择其他 session。`);
       continue;
     }
     state.setPendingBinding({
@@ -510,7 +519,7 @@ async function configureWeixinPrimaryBinding(
 async function resolveWeixinPrimarySessionId(
   rl: Interface,
   answer: string,
-  sessions: DiscoveredCodexSession[],
+  choices: SessionChoices,
 ): Promise<string | undefined> {
   if (isManualSessionInputAction(answer)) {
     const manual = (await rl.question("请输入 Session ID [0 返回]: ")).trim();
@@ -519,7 +528,7 @@ async function resolveWeixinPrimarySessionId(
   }
   if (/^\d+$/.test(answer)) {
     const index = Number.parseInt(answer, 10);
-    if (index >= 1 && index <= sessions.length) return sessions[index - 1].id;
+    if (index >= 1 && index <= choices.selectable.length) return choices.selectable[index - 1].id;
     console.log(`没有第 ${index} 项，请重新选择。`);
     return undefined;
   }

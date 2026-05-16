@@ -224,13 +224,16 @@ Chat Codex
   n. 新建 Codex session
   m. 手动输入 Session ID
   0. 暂不绑定，首条消息自动创建
+
+不可选（已绑定其他聊天）:
+  已绑定到飞书 / default / 张三    飞书私聊适配    019e2e99
 ```
 
 绑定规则：
 
 - 如果已发现微信 route，直接绑定该 route。
 - 如果未发现微信 route，保存 pending 微信主聊天绑定。
-- 如果 session 已被其他 route owner 占用，不出现在可选列表。
+- 如果 session 已被其他 route owner 占用，不出现在可选列表，单独显示在“不可选”区并标明当前绑定到哪里。
 - 手动输入已被占用 session 时，给出中文冲突说明并停留在选择页。
 - 输入错误不退出，不抛原始异常。
 

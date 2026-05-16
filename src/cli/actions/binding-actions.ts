@@ -294,15 +294,19 @@ export class BindingActions {
   }
 
   private routeLabel(routeKey: string): string {
-    const route = this.state.listRoutes().find((item) => item.routeKey === routeKey);
-    if (route) return formatRouteLabel(route);
-    if (routeKey.startsWith("pending:")) {
-      const pendingId = routeKey.slice("pending:".length);
-      const pending = this.state.listPendingBindings().find((item) => item.id === pendingId);
-      return pending?.label ? `${pending.label}（待生效）` : "待生效绑定";
-    }
-    return routeKey;
+    return formatOwnerRouteLabel(this.state, routeKey);
   }
+}
+
+export function formatOwnerRouteLabel(state: FileStateStore, routeKey: string): string {
+  const route = state.listRoutes().find((item) => item.routeKey === routeKey);
+  if (route) return formatRouteLabel(route);
+  if (routeKey.startsWith("pending:")) {
+    const pendingId = routeKey.slice("pending:".length);
+    const pending = state.listPendingBindings().find((item) => item.id === pendingId);
+    return pending?.label ? `${pending.label}（待生效）` : "待生效绑定";
+  }
+  return routeKey;
 }
 
 export function formatRouteLabel(route: RouteRecord): string {
