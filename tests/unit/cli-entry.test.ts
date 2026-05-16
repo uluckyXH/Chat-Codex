@@ -12,7 +12,7 @@ test("package exposes chat-codex as the main startup command", () => {
   };
 
   assert.equal(packageJson.name, "chat-codex");
-  assert.equal(packageJson.bin?.["chat-codex"], "./dist/src/cli.js");
+  assert.equal(packageJson.bin?.["chat-codex"], "dist/src/cli.js");
   assert.equal(packageJson.bin?.["codex-wechat-bridge"], undefined);
   assert.equal(packageJson.scripts?.["chat-codex"], "npm run build && node dist/src/cli.js");
   assert.equal(packageJson.scripts?.["cli:chat-codex"], "npm run build && node dist/src/cli.js");

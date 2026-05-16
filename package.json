@@ -1,13 +1,41 @@
 {
   "name": "chat-codex",
   "version": "0.1.0",
-  "private": true,
-  "description": "Lightweight middleware between Codex and pluggable chat channels.",
+  "description": "Connect local Codex to Weixin and Feishu through a terminal TUI.",
   "author": "小黄 and Codex",
   "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/uluckyXH/Chat-Codex#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uluckyXH/Chat-Codex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/uluckyXH/Chat-Codex/issues"
+  },
+  "keywords": [
+    "codex",
+    "chat",
+    "wechat",
+    "weixin",
+    "feishu",
+    "lark",
+    "tui",
+    "ink"
+  ],
+  "files": [
+    "dist/src/**/*.js",
+    "README.md",
+    "README.en.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "npm-shrinkwrap.json"
+  ],
+  "bundleDependencies": [
+    "@larksuiteoapi/node-sdk"
+  ],
   "bin": {
-    "chat-codex": "./dist/src/cli.js"
+    "chat-codex": "dist/src/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -21,7 +49,13 @@
     "cli:terminal:codex": "npm run build && node dist/src/cli.js terminal codex",
     "cli:weixin:status": "npm run build && node dist/src/cli.js weixin status",
     "cli:weixin:login": "npm run build && node dist/src/cli.js weixin login",
-    "cli:feishu:status": "npm run build && node dist/src/cli.js feishu status"
+    "cli:feishu:status": "npm run build && node dist/src/cli.js feishu status",
+    "pack:dry-run": "npm pack --dry-run",
+    "prepack": "npm run build && node scripts/patch-bundled-lark-sdk.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=22"
@@ -29,14 +63,17 @@
   "devDependencies": {
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.14",
+    "ink-testing-library": "^4.0.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
     "@larksuiteoapi/node-sdk": "^1.64.0",
     "ink": "^7.0.3",
-    "ink-testing-library": "^4.0.0",
     "qrcode-terminal": "^0.12.0",
     "react": "^19.2.6"
+  },
+  "overrides": {
+    "axios": "^1.16.1"
   }
 }

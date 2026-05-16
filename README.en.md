@@ -29,6 +29,7 @@ A lightweight chat middleware that connects local Codex to Weixin and Feishu.
 <p align="center">
 <a href="#overview">Overview</a> ·
 <a href="#capabilities">Capabilities</a> ·
+<a href="#installation">Installation</a> ·
 <a href="#tech-stack">Tech Stack</a> ·
 <a href="#development-quick-start">Quick Start</a> ·
 <a href="#development-commands">Commands</a> ·
@@ -55,6 +56,15 @@ The core goal is to make Codex usable from chat windows while keeping routes, se
 - Chat-side commands for creating/resuming sessions, inspecting status, stopping turns, handling approvals, switching permissions, switching models, and sending files.
 - Local persistence for channel instances, chat bindings, session owners, session policies, and pending bindings.
 - Runtime TUI log panel for inbound messages, outbound replies, progress, media, and errors.
+
+## Installation
+
+```bash
+npm install -g chat-codex
+chat-codex
+```
+
+On first launch, follow the TUI to check Codex, manage channels, bind chats, and start the service.
 
 ## Tech Stack
 
