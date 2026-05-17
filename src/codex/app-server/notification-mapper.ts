@@ -1,5 +1,6 @@
 import type { CodexProgressKind } from "../types.js";
-import { arrayValue, objectValue, stringValue } from "./value-parsers.js";
+import { commandExecutionProgress } from "./command-output-summary.js";
+import { arrayValue, numberValue, objectValue, stringValue } from "./value-parsers.js";
 
 export function messagePhaseValue(value: unknown): "commentary" | "final_answer" | undefined {
   return value === "commentary" || value === "final_answer" ? value : undefined;
@@ -8,12 +9,14 @@ export function messagePhaseValue(value: unknown): "commentary" | "final_answer"
 export function progressFromThreadItem(item: Record<string, unknown>): { text: string; kind: CodexProgressKind } | undefined {
   const itemType = stringValue(item.type);
   if (itemType === "commandExecution") {
-    const command = stringValue(item.command);
-    const output = stringValue(item.aggregatedOutput);
-    const status = stringValue(item.status);
-    if (!command) return undefined;
-    const label = status === "failed" ? "命令失败" : "命令完成";
-    return { text: output ? `${label}: ${command}\n输出:\n${output.trim()}` : `${label}: ${command}`, kind: "command" };
+    return commandExecutionProgress({
+      command: stringValue(item.command),
+      cwd: stringValue(item.cwd),
+      status: stringValue(item.status),
+      exitCode: numberValue(item.exitCode),
+      durationMs: numberValue(item.durationMs),
+      aggregatedOutput: stringValue(item.aggregatedOutput),
+    });
   }
   if (itemType === "fileChange") {
     const changes = arrayValue(item.changes)

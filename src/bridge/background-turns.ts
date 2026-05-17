@@ -6,8 +6,9 @@ import type { ChannelMessage, ChannelTarget } from "../protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../protocol/delivery-policy.js";
 import type { MemoryStateStore } from "../state/memory-state-store.js";
 import type { BackgroundTurnState } from "./bridge-types.js";
-import { composeFinalAnswer, truncateForChannel } from "./formatters.js";
+import { composeFinalAnswer } from "./formatters.js";
 import type { BridgeDelivery } from "./delivery.js";
+import { BridgeProgressDelivery } from "./progress-delivery.js";
 
 export interface BridgeBackgroundTurnsOptions {
   state: MemoryStateStore;
@@ -23,6 +24,7 @@ export interface BridgeBackgroundTurnsOptions {
     routeKey: string,
     kind: CodexProgressKind | undefined,
   ): boolean;
+  progressDelivery?: BridgeProgressDelivery;
   startRouteWorker(routeKey: string): void;
   routeQueueLength(routeKey: string): number;
   hasRouteWorker(routeKey: string): boolean;
@@ -37,7 +39,7 @@ export class BridgeBackgroundTurns {
   private readonly routeMessages: Map<string, ChannelMessage>;
   private readonly routeTargets: Map<string, ChannelTarget>;
   private readonly deliveryPolicyFor: BridgeBackgroundTurnsOptions["deliveryPolicyFor"];
-  private readonly shouldDeliverProgressWithPolicy: BridgeBackgroundTurnsOptions["shouldDeliverProgressWithPolicy"];
+  private readonly progressDelivery: BridgeProgressDelivery;
   private readonly startRouteWorker: BridgeBackgroundTurnsOptions["startRouteWorker"];
   private readonly routeQueueLength: BridgeBackgroundTurnsOptions["routeQueueLength"];
   private readonly hasRouteWorker: BridgeBackgroundTurnsOptions["hasRouteWorker"];
@@ -52,7 +54,11 @@ export class BridgeBackgroundTurns {
     this.routeMessages = options.routeMessages;
     this.routeTargets = options.routeTargets;
     this.deliveryPolicyFor = options.deliveryPolicyFor;
-    this.shouldDeliverProgressWithPolicy = options.shouldDeliverProgressWithPolicy;
+    this.progressDelivery = options.progressDelivery ?? new BridgeProgressDelivery({
+      delivery: this.delivery,
+      transcript: this.transcript,
+      shouldDeliverProgress: options.shouldDeliverProgressWithPolicy,
+    });
     this.startRouteWorker = options.startRouteWorker;
     this.routeQueueLength = options.routeQueueLength;
     this.hasRouteWorker = options.hasRouteWorker;
@@ -79,12 +85,13 @@ export class BridgeBackgroundTurns {
       });
       await this.delivery.sendTyping(state.target, true);
     } else if (event.type === "assistant.progress") {
-      const progressText = `Codex 进度:\n${truncateForChannel(event.text)}`;
-      if (this.shouldDeliverProgressWithPolicy(deliveryPolicy, state.routeKey, event.kind)) {
-        await this.delivery.sendProgressText(state.routeKey, state.target, progressText);
-      } else if (deliveryPolicy.progress === "suppress") {
-        this.transcript?.localProgress?.(state.target, progressText);
-      }
+      await this.progressDelivery.handleProgress({
+        routeKey: state.routeKey,
+        target: state.target,
+        policy: deliveryPolicy,
+        text: event.text,
+        kind: event.kind,
+      });
     } else if (event.type === "assistant.plan") {
       state.finalPlanText = event.text;
     } else if (event.type === "assistant.delta") {
@@ -104,6 +111,7 @@ export class BridgeBackgroundTurns {
       await this.finishTurn(event.turnId, state);
     } else if (event.type === "turn.failed") {
       this.state.setSessionStatus(event.sessionId, { type: "failed", error: event.error });
+      await this.progressDelivery.flushRoute(state.routeKey);
       await this.delivery.sendText(state.target, `Codex 执行失败: ${event.error}`);
       await this.finishTurn(event.turnId, state, false);
     }
@@ -135,11 +143,13 @@ export class BridgeBackgroundTurns {
   }
 
   private async finishTurn(turnId: string, state: BackgroundTurnState, sendFinal = true): Promise<void> {
+    await this.progressDelivery.flushRoute(state.routeKey);
     const composedFinalText = composeFinalAnswer(state.finalPlanText, state.finalText);
     if (sendFinal && composedFinalText) {
       await this.delivery.sendText(state.target, composedFinalText);
     }
     await this.delivery.sendTyping(state.target, false);
+    this.progressDelivery.clearRoute(state.routeKey);
     this.turns.delete(turnId);
     if (this.routeQueueLength(state.routeKey) > 0 && !this.hasRouteWorker(state.routeKey)) {
       this.startRouteWorker(state.routeKey);

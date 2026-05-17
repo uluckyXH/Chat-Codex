@@ -256,6 +256,28 @@ rl.on("line", (line) => {
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
       return;
     }
+    if (prompt.includes("command output spam")) {
+      const output = Array.from({ length: 60 }, (_, index) => "line " + (index + 1)).join("\\n");
+      send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "commandExecution", id: "cmd-spam", command: "npm test", cwd: message.params.cwd, status: "inProgress" } } });
+      for (const line of output.split("\\n")) {
+        send({ method: "item/commandExecution/outputDelta", params: { threadId, turnId, itemId: "cmd-spam", delta: line + "\\n" } });
+      }
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "commandExecution", id: "cmd-spam", command: "npm test", cwd: message.params.cwd, aggregatedOutput: output, exitCode: 0, durationMs: 2345, status: "completed" } } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "command output done", phase: null, memoryCitation: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+      return;
+    }
+    if (prompt.includes("command output failure")) {
+      const output = Array.from({ length: 80 }, (_, index) => "fatal line " + (index + 1)).join("\\n");
+      send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "commandExecution", id: "cmd-fail", command: "npm test", cwd: message.params.cwd, status: "inProgress" } } });
+      for (const line of output.split("\\n")) {
+        send({ method: "item/commandExecution/outputDelta", params: { threadId, turnId, itemId: "cmd-fail", delta: "\\r" + line } });
+      }
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "commandExecution", id: "cmd-fail", command: "npm test", cwd: message.params.cwd, aggregatedOutput: output, exitCode: 1, durationMs: 4567, status: "failed" } } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "command output failed", phase: null, memoryCitation: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+      return;
+    }
     if (prompt.includes("progress")) {
       send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "reasoning", id: "reasoning-1", summary: [], content: [] } } });
       send({ method: "item/reasoning/summaryTextDelta", params: { threadId, turnId, itemId: "reasoning-1", summaryIndex: 0, delta: "我先确认当前状态。" } });
@@ -622,6 +644,62 @@ test("AppServerCodexAdapter does not duplicate chunked commentary on completion"
   assert.ok(progressTexts[0].includes("第二段"));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "commentary chunks final"));
   assert.equal(events.some((event) => event.type === "assistant.completed" && event.text.includes("第一段内容")), false);
+});
+
+test("AppServerCodexAdapter aggregates command output deltas into one bounded summary", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "command output spam please")) {
+    events.push(event);
+  }
+  await adapter.stop();
+
+  const commandProgress = events
+    .filter((event) => event.type === "assistant.progress" && event.kind === "command")
+    .map((event) => event.type === "assistant.progress" ? event.text : "");
+  assert.equal(commandProgress.length, 2);
+  assert.equal(commandProgress[0], "正在执行命令: npm test");
+  assert.match(commandProgress[1], /命令完成: npm test/);
+  assert.match(commandProgress[1], /输出摘要/);
+  assert.match(commandProgress[1], /line 60/);
+  assert.match(commandProgress[1], /已省略/);
+  assert.ok(commandProgress[1].length < 1200);
+  assert.equal(events.some((event) => event.type === "assistant.progress" && event.text === "line 1\n"), false);
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "command output done"));
+});
+
+test("AppServerCodexAdapter keeps failure command tail in bounded summary", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "command output failure please")) {
+    events.push(event);
+  }
+  await adapter.stop();
+
+  const summary = events
+    .filter((event) => event.type === "assistant.progress" && event.kind === "command")
+    .map((event) => event.type === "assistant.progress" ? event.text : "")
+    .find((text) => text.includes("命令失败"));
+  assert.ok(summary);
+  assert.match(summary, /exit=1/);
+  assert.match(summary, /错误摘要/);
+  assert.match(summary, /fatal line 80/);
+  assert.match(summary, /已省略/);
+  assert.ok(summary.length < 2000);
 });
 
 test("AppServerCodexAdapter reports interactive approval support", () => {

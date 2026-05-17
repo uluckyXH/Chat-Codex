@@ -49,6 +49,7 @@ export function createTurnQueueRecord(
     ...(collaborationMode ? { collaborationMode } : {}),
     finalText: "",
     progressDrafts: new Map(),
+    commandExecutions: new Map(),
     agentMessagePhases: new Map(),
     emittedProgressItemIds: new Set(),
     emittedProgress: new Set(),

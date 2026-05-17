@@ -10,6 +10,7 @@ import { stripBridgeSendFileRefs } from "./media-extractor.js";
 import type { TurnScheduler } from "./turn-scheduler.js";
 import { TurnSchedulerAbortError } from "./turn-scheduler.js";
 import type { BridgeDelivery } from "./delivery.js";
+import { BridgeProgressDelivery } from "./progress-delivery.js";
 import type { BridgeSessionFlow } from "./session-flow.js";
 import {
   composeFinalAnswer,
@@ -33,6 +34,7 @@ export interface BridgeRouteQueueOptions {
     routeKey: string,
     kind: CodexProgressKind | undefined,
   ): boolean;
+  progressDelivery?: BridgeProgressDelivery;
 }
 
 export class BridgeRouteQueue {
@@ -46,7 +48,7 @@ export class BridgeRouteQueue {
   private readonly hasBackgroundTurnForRoute: BridgeRouteQueueOptions["hasBackgroundTurnForRoute"];
   private readonly currentCollaborationMode: BridgeRouteQueueOptions["currentCollaborationMode"];
   private readonly deliveryPolicyFor: BridgeRouteQueueOptions["deliveryPolicyFor"];
-  private readonly shouldDeliverProgressWithPolicy: BridgeRouteQueueOptions["shouldDeliverProgressWithPolicy"];
+  private readonly progressDelivery: BridgeProgressDelivery;
   private readonly queues = new Map<string, QueuedPrompt[]>();
   private readonly workers = new Map<string, Promise<void>>();
   private readonly abortControllers = new Map<string, AbortController>();
@@ -62,7 +64,11 @@ export class BridgeRouteQueue {
     this.hasBackgroundTurnForRoute = options.hasBackgroundTurnForRoute;
     this.currentCollaborationMode = options.currentCollaborationMode;
     this.deliveryPolicyFor = options.deliveryPolicyFor;
-    this.shouldDeliverProgressWithPolicy = options.shouldDeliverProgressWithPolicy;
+    this.progressDelivery = options.progressDelivery ?? new BridgeProgressDelivery({
+      delivery: this.delivery,
+      transcript: this.transcript,
+      shouldDeliverProgress: options.shouldDeliverProgressWithPolicy,
+    });
   }
 
   async enqueuePrompt(
@@ -204,12 +210,13 @@ export class BridgeRouteQueue {
                 startedAt: currentTurnStartedAt,
               });
             } else if (event.type === "assistant.progress") {
-              const progressText = `Codex 进度:\n${truncateForChannel(event.text)}`;
-              if (this.shouldDeliverProgressWithPolicy(deliveryPolicy, message.routeKey, event.kind)) {
-                await this.delivery.sendProgressText(message.routeKey, target, progressText);
-              } else if (deliveryPolicy.progress === "suppress") {
-                this.transcript?.localProgress?.(target, progressText);
-              }
+              await this.progressDelivery.handleProgress({
+                routeKey: message.routeKey,
+                target,
+                policy: deliveryPolicy,
+                text: event.text,
+                kind: event.kind,
+              });
             } else if (event.type === "assistant.plan") {
               finalPlanText = event.text;
             } else if (event.type === "assistant.delta") {
@@ -228,9 +235,11 @@ export class BridgeRouteQueue {
               this.state.setSessionStatus(session.id, { type: "idle" });
             } else if (event.type === "turn.failed") {
               this.state.setSessionStatus(session.id, { type: "failed", error: event.error });
+              await this.progressDelivery.flushRoute(message.routeKey);
               await this.delivery.sendText(target, `Codex 执行失败: ${event.error}`);
             }
           }
+          await this.progressDelivery.flushRoute(message.routeKey);
           const composedFinalText = composeFinalAnswer(finalPlanText, finalText);
           if (composedFinalText) {
             const visibleText = sendFile ? stripBridgeSendFileRefs(composedFinalText) : composedFinalText;
@@ -242,6 +251,8 @@ export class BridgeRouteQueue {
         });
       }, { signal: abortController.signal });
     } finally {
+      await this.progressDelivery.flushRoute(message.routeKey);
+      this.progressDelivery.clearRoute(message.routeKey);
       if (this.abortControllers.get(message.routeKey) === abortController) {
         this.abortControllers.delete(message.routeKey);
       }

@@ -7,6 +7,7 @@ import type {
   CodexSessionModelInfo,
   CodexSessionStatus,
 } from "../types.js";
+import type { CommandExecutionRecord } from "./command-output-summary.js";
 
 export interface AppServerSessionRecord {
   session: CodexSession;
@@ -60,6 +61,7 @@ export interface TurnQueueRecord {
   collaborationMode?: CodexCollaborationMode;
   finalText: string;
   progressDrafts: Map<string, ProgressDraft>;
+  commandExecutions: Map<string, CommandExecutionRecord>;
   agentMessagePhases: Map<string, "commentary" | "final_answer">;
   emittedProgressItemIds: Set<string>;
   emittedProgress: Set<string>;

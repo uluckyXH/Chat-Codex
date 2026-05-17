@@ -10,6 +10,12 @@ import {
 import { withContext } from "./session-status.js";
 import { AsyncEventQueue, createTurnQueueRecord, shouldCreateBackgroundTurn } from "./turn-store.js";
 import type { AppServerSessionRecord, JsonRpcNotification, TurnQueueRecord } from "./types.js";
+import {
+  appendCommandOutput,
+  commandExecutionProgress,
+  commandStartProgress,
+  createCommandExecutionRecord,
+} from "./command-output-summary.js";
 import { arrayValue, isoFromSeconds, numberValue, objectValue, stringValue } from "./value-parsers.js";
 import { parseTokenUsage } from "./model-policy.js";
 
@@ -193,7 +199,10 @@ export class AppServerTurnController {
     }
     if (notification.method === "item/commandExecution/outputDelta") {
       const delta = stringValue(params.delta);
-      if (delta) this.pushTurnEvent(turnId, { type: "assistant.progress", sessionId, turnId, text: delta, kind: "command" });
+      const itemId = stringValue(params.itemId);
+      if (turn && itemId && delta) {
+        this.appendCommandOutputDelta(turn, itemId, delta);
+      }
       return;
     }
     if (notification.method === "item/completed") {
@@ -288,6 +297,26 @@ export class AppServerTurnController {
       }
       return;
     }
+    if (itemType === "commandExecution") {
+      if (itemId) {
+        const record = turn.commandExecutions.get(itemId);
+        const progress = commandExecutionProgress({
+          command: stringValue(item.command) ?? record?.command,
+          cwd: stringValue(item.cwd) ?? record?.cwd,
+          status: stringValue(item.status),
+          exitCode: numberValue(item.exitCode),
+          durationMs: numberValue(item.durationMs),
+          aggregatedOutput: stringValue(item.aggregatedOutput),
+          output: record?.output,
+        });
+        turn.commandExecutions.delete(itemId);
+        if (progress) this.pushProgressEvent(turn, sessionId, turnId, progress.text, progress.kind);
+      } else {
+        const progress = progressFromThreadItem(item);
+        if (progress) this.pushProgressEvent(turn, sessionId, turnId, progress.text, progress.kind);
+      }
+      return;
+    }
     const progress = progressFromThreadItem(item);
     if (progress) {
       this.pushProgressEvent(turn, sessionId, turnId, progress.text, progress.kind);
@@ -306,7 +335,33 @@ export class AppServerTurnController {
       const itemId = stringValue(item.id);
       const phase = messagePhaseValue(item.phase);
       if (itemId && phase) turn.agentMessagePhases.set(itemId, phase);
+    } else if (itemType === "commandExecution") {
+      this.handleCommandStarted(turn, item);
     }
+  }
+
+  private handleCommandStarted(turn: TurnQueueRecord, item: Record<string, unknown>): void {
+    const itemId = stringValue(item.id);
+    const command = stringValue(item.command);
+    if (itemId) {
+      turn.commandExecutions.set(itemId, createCommandExecutionRecord({
+        itemId,
+        command,
+        cwd: stringValue(item.cwd),
+        startedAtMs: numberValue(item.startedAtMs),
+      }));
+    }
+    const progress = commandStartProgress(command);
+    if (progress) this.pushProgressEvent(turn, turn.sessionId, turn.turnId, progress, "command");
+  }
+
+  private appendCommandOutputDelta(turn: TurnQueueRecord, itemId: string, delta: string): void {
+    let record = turn.commandExecutions.get(itemId);
+    if (!record) {
+      record = createCommandExecutionRecord({ itemId });
+      turn.commandExecutions.set(itemId, record);
+    }
+    appendCommandOutput(record.output, delta);
   }
 
   private appendProgressDelta(

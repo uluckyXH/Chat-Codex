@@ -26,6 +26,7 @@ import { UnlimitedTurnScheduler } from "./turn-scheduler.js";
 import { BridgeBackgroundTurns } from "./background-turns.js";
 import { BridgeCommandRouter } from "./command-router.js";
 import { BridgeDelivery } from "./delivery.js";
+import { BridgeProgressDelivery } from "./progress-delivery.js";
 import { BridgeRouteQueue } from "./route-queue.js";
 import { BridgeRouteSteering } from "./route-steering.js";
 import { BridgeSessionFlow } from "./session-flow.js";
@@ -70,6 +71,7 @@ export class Bridge {
   private readonly logger: Logger;
   private readonly transcript?: TranscriptSink;
   private readonly delivery: BridgeDelivery;
+  private readonly progressDelivery: BridgeProgressDelivery;
   private readonly backgroundTurns: BridgeBackgroundTurns;
   private readonly routeQueue: BridgeRouteQueue;
   private readonly routeSteering: BridgeRouteSteering;
@@ -108,6 +110,11 @@ export class Bridge {
       transcript: this.transcript,
       approvalSendRetryDelayMs: options.approvalSendRetryDelayMs ?? APPROVAL_SEND_RETRY_DELAY_MS,
     });
+    this.progressDelivery = new BridgeProgressDelivery({
+      delivery: this.delivery,
+      transcript: this.transcript,
+      shouldDeliverProgress: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
+    });
     this.sessionFlow = new BridgeSessionFlow({
       codex: this.codex,
       state: this.state,
@@ -135,6 +142,7 @@ export class Bridge {
       currentCollaborationMode: (routeKey) => this.routeCollaborationModes.get(routeKey),
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
+      progressDelivery: this.progressDelivery,
     });
     this.backgroundTurns = new BridgeBackgroundTurns({
       state: this.state,
@@ -146,6 +154,7 @@ export class Bridge {
       routeTargets: this.routeTargets,
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
+      progressDelivery: this.progressDelivery,
       startRouteWorker: (routeKey) => this.routeQueue.startRouteWorker(routeKey),
       routeQueueLength: (routeKey) => this.routeQueue.queueLength(routeKey),
       hasRouteWorker: (routeKey) => this.routeQueue.hasWorker(routeKey),
@@ -272,6 +281,7 @@ export class Bridge {
   async stop(): Promise<void> {
     this.routeSteering.clearAll();
     this.pendingMedia.clearAll();
+    this.progressDelivery.clearAll();
     this.stopBackgroundEvents?.();
     this.stopBackgroundEvents = undefined;
     await this.channels.stop();

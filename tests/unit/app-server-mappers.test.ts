@@ -177,9 +177,22 @@ test("app-server notification helpers map progress and errors", () => {
   assert.equal(messagePhaseValue("commentary"), "commentary");
   assert.equal(messagePhaseValue("other"), undefined);
   assert.deepEqual(progressFromThreadItem({ type: "commandExecution", command: "npm test", aggregatedOutput: "ok\n", status: "completed" }), {
-    text: "命令完成: npm test\n输出:\nok",
+    text: "命令完成: npm test\n输出摘要:\nok",
     kind: "command",
   });
+  const longCommandProgress = progressFromThreadItem({
+    type: "commandExecution",
+    command: "npm test",
+    aggregatedOutput: Array.from({ length: 50 }, (_, index) => `\u001b[31mline ${index + 1}\u001b[39m`).join("\n"),
+    status: "completed",
+    durationMs: 1234,
+  });
+  assert.equal(longCommandProgress?.kind, "command");
+  assert.match(longCommandProgress?.text ?? "", /命令完成: npm test/);
+  assert.match(longCommandProgress?.text ?? "", /耗时=1\.2s/);
+  assert.match(longCommandProgress?.text ?? "", /line 50/);
+  assert.match(longCommandProgress?.text ?? "", /已省略/);
+  assert.match(longCommandProgress?.text ?? "", /已清理 ANSI\/control 控制字符/);
   assert.deepEqual(progressFromThreadItem({ type: "fileChange", changes: [{ path: "a.ts" }] }), {
     text: "文件变更完成: a.ts",
     kind: "file_change",
@@ -202,6 +215,7 @@ test("app-server turn store preserves queue and background rules", async () => {
   assert.equal(record.sessionId, "session-1");
   assert.equal(record.turnId, "turn-1");
   assert.equal(record.collaborationMode, "plan");
+  assert.equal(record.commandExecutions.size, 0);
   assert.equal(record.closed, false);
   assert.equal(shouldCreateBackgroundTurn("thread/tokenUsage/updated"), false);
   assert.equal(shouldCreateBackgroundTurn("turn/started"), true);
