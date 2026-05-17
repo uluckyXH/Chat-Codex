@@ -231,6 +231,68 @@ test("Ink TUI first run exit action is selectable", async () => {
   view.unmount();
 });
 
+test("Ink TUI auto-checks Weixin login after QR is shown", async () => {
+  const previous = process.env.CHAT_CODEX_TUI_WEIXIN_LOGIN_CHECK_INTERVAL_MS;
+  process.env.CHAT_CODEX_TUI_WEIXIN_LOGIN_CHECK_INTERVAL_MS = "20";
+  let checks = 0;
+  try {
+    const view = render(<ChatCodexTui actions={mockActions(emptyDashboardFixture(), {
+      checkWeixinLogin: async () => {
+        checks += 1;
+        return { state: "pending", message: "还没有检测到扫码确认。" };
+      },
+    })} onDone={() => undefined} />);
+    await waitForInk();
+
+    view.stdin.write("1");
+    await waitForInk();
+    assert.match(cleanFrame(view), /TUI 会每 5 秒自动检查登录结果/);
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await waitForInk();
+    assert.ok(checks >= 1);
+
+    view.unmount();
+  } finally {
+    if (previous === undefined) delete process.env.CHAT_CODEX_TUI_WEIXIN_LOGIN_CHECK_INTERVAL_MS;
+    else process.env.CHAT_CODEX_TUI_WEIXIN_LOGIN_CHECK_INTERVAL_MS = previous;
+  }
+});
+
+test("Ink TUI shows Weixin primary new-session action as an Enter-selectable row", async () => {
+  const dashboard = dashboardFixture();
+  dashboard.channels[0].record.id = "weixin-wx-main";
+  dashboard.channels[0].record.type = "weixin";
+  dashboard.channels[0].record.defaultAccountId = "wx-main";
+  dashboard.channels[0].status.channelId = "weixin-wx-main";
+  dashboard.channels[0].status.account = "wx-main";
+  let created = false;
+  const view = render(<ChatCodexTui actions={mockActions(dashboard, {
+    setWeixinPrimaryNew: () => {
+      created = true;
+      return { ok: true, message: "已设置：收到第一条微信私聊后创建新 session。" };
+    },
+  })} onDone={() => undefined} />);
+  await waitForInk();
+
+  view.stdin.write("c");
+  await waitForInk();
+  view.stdin.write("\r");
+  await waitForInk();
+  view.stdin.write("\r");
+  await waitForInk();
+
+  assert.match(cleanFrame(view), /微信主聊天绑定/);
+  assert.match(cleanFrame(view), /直接操作/);
+  assert.match(cleanFrame(view), /新建 Codex session/);
+
+  view.stdin.write("\r");
+  await waitForInk();
+  assert.equal(created, true);
+
+  view.unmount();
+});
+
 test("Ink TUI updates new session workdir from current directory and manual input", async () => {
   const dashboard = dashboardFixture();
   const view = render(<ChatCodexTui actions={mockActions(dashboard)} onDone={() => undefined} />);
@@ -531,6 +593,9 @@ function mockActions(
   dashboard: LauncherDashboard,
   overrides: {
     addFeishuBot?: (input: { appId?: string; appSecret?: string; domain?: string; accountId?: string }) => Promise<unknown>;
+    checkWeixinLogin?: () => Promise<unknown>;
+    listWeixinPrimaryChoices?: () => { selectable: unknown[]; unavailable: unknown[] };
+    setWeixinPrimaryNew?: (channel: unknown) => unknown;
     trustRouteManually?: (routeKey: string) => unknown;
     revokeRouteTrust?: (routeKey: string, options?: { unbindSession?: boolean }) => unknown;
   } = {},
@@ -558,11 +623,14 @@ function mockActions(
       qrCode: "QR-CODE",
       fallbackLink: "https://login.example/qr",
     }),
-    checkWeixinLogin: async () => ({ state: "pending", message: "还没有检测到扫码确认。" }),
+    checkWeixinLogin: overrides.checkWeixinLogin ?? (async () => ({ state: "pending", message: "还没有检测到扫码确认。" })),
     cancelWeixinLogin: () => ({ state: "cancelled", message: "已返回管理渠道，未添加微信账号。" }),
     addFeishuBot: overrides.addFeishuBot ?? (async () => ({ ok: true, message: "飞书机器人已添加。" })),
     listSessionChoices: () => ({ selectable: [], unavailable: [] }),
-    listWeixinPrimaryChoices: () => ({ selectable: [], unavailable: [] }),
+    listWeixinPrimaryChoices: overrides.listWeixinPrimaryChoices ?? (() => ({ selectable: [], unavailable: [] })),
+    setWeixinPrimaryNew: overrides.setWeixinPrimaryNew ?? (() => ({ ok: true, message: "已设置：收到第一条微信私聊后创建新 session。" })),
+    setWeixinPrimaryNone: () => ({ ok: true, message: "已设置：暂不绑定，首条消息自动创建。" }),
+    setWeixinPrimaryExisting: () => ({ ok: true, message: "已设置微信主聊天绑定。" }),
     formatRunPolicy: () => "审批模式（workspace-write 沙箱）",
     getCurrentProcessWorkdir: () => "/terminal/repo",
     setDefaultWorkdir: (input?: string, options?: { createIfMissing?: boolean }) => {

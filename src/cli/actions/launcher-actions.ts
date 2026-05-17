@@ -32,7 +32,7 @@ import {
 } from "./binding-actions.js";
 import { ChannelActions, feishuChannelId, type ManagedChannelSummary, type RemoveChannelResult } from "./channel-actions.js";
 
-const WEIXIN_LOGIN_CHECK_TIMEOUT_MS = 15_000;
+const WEIXIN_LOGIN_CHECK_TIMEOUT_MS = 5_000;
 
 export interface LauncherDashboard {
   channels: ManagedChannelSummary[];

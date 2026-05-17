@@ -48,6 +48,7 @@ export function ChatCodexTui({ actions, onDone }: ChatCodexTuiProps): React.JSX.
   const [confirm, setConfirm] = useState<{ message: string; yes: () => void | Promise<void> }>();
   const [manualValue, setManualValue] = useState("");
   const weixinLoginRequest = useRef(0);
+  const weixinLoginCheckInFlight = useRef(false);
   const channels = dashboard?.channels ?? [];
   const bindings = dashboard?.bindings ?? [];
   const pendingBindings = dashboard?.pendingBindings ?? [];
@@ -70,10 +71,15 @@ export function ChatCodexTui({ actions, onDone }: ChatCodexTuiProps): React.JSX.
   }, []);
 
   useEffect(() => {
-    setSelected(screen.name === "home" && (dashboard?.channels.length ?? 0) > 0 ? 6 : 0);
+    if (screen.name === "weixinBinding") {
+      const channel = channels.find((item) => item.record.id === screen.channelId)?.record;
+      setSelected(channel ? actions.listWeixinPrimaryChoices(channel)?.selectable.length ?? 0 : 0);
+    } else {
+      setSelected(screen.name === "home" && (dashboard?.channels.length ?? 0) > 0 ? 6 : 0);
+    }
     setConfirm(undefined);
     setManualValue("");
-  }, [screen.name, dashboard?.channels.length]);
+  }, [actions, channels, screen, dashboard?.channels.length]);
 
   useEffect(() => {
     if (screen.name === "channels" && selected < channels.length) {
@@ -102,7 +108,8 @@ export function ChatCodexTui({ actions, onDone }: ChatCodexTuiProps): React.JSX.
     if (screen.name === "sessionSelect") return Math.max(0, getSessionChoices(screen.target).selectable.length - 1);
     if (screen.name === "weixinBinding") {
       const channel = channels.find((item) => item.record.id === screen.channelId)?.record;
-      return Math.max(0, (channel ? actions.listWeixinPrimaryChoices(channel)?.selectable.length ?? 0 : 0) - 1);
+      const selectableCount = channel ? actions.listWeixinPrimaryChoices(channel)?.selectable.length ?? 0 : 0;
+      return Math.max(0, selectableCount + 3 - 1);
     }
     if (screen.name === "pairing") return Math.max(0, pairings.length - 1);
     if (screen.name === "pairingDetail") return currentPairing?.trusted ? 2 : 1;
@@ -162,6 +169,35 @@ export function ChatCodexTui({ actions, onDone }: ChatCodexTuiProps): React.JSX.
       if (weixinLoginRequest.current === requestId) setLoading(false);
     }
   };
+
+  const checkWeixinLoginResult = async (): Promise<void> => {
+    if (!screenIs("addWeixin", screen) || loading || weixinLoginCheckInFlight.current) return;
+    const requestId = weixinLoginRequest.current;
+    weixinLoginCheckInFlight.current = true;
+    setLoading(true);
+    try {
+      const result = await actions.checkWeixinLogin();
+      if (weixinLoginRequest.current !== requestId) return;
+      if (result.state === "connected") {
+        await refresh(result.message);
+        setScreen({ name: "weixinBinding", channelId: result.channel.id });
+        return;
+      }
+      setFlash({ kind: result.state === "failed" ? "error" : "info", message: result.message });
+    } finally {
+      if (weixinLoginRequest.current === requestId) setLoading(false);
+      weixinLoginCheckInFlight.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (screen.name !== "addWeixin" || !screen.login || loading) return undefined;
+    const requestId = weixinLoginRequest.current;
+    const timer = setTimeout(() => {
+      if (weixinLoginRequest.current === requestId) void checkWeixinLoginResult();
+    }, weixinAutoCheckIntervalMs());
+    return () => clearTimeout(timer);
+  }, [loading, screen]);
 
   const back = (): void => {
     if (confirm) {
@@ -401,15 +437,7 @@ export function ChatCodexTui({ actions, onDone }: ChatCodexTuiProps): React.JSX.
       await openAddWeixinLogin();
       return;
     }
-    setLoading(true);
-    const result = await actions.checkWeixinLogin();
-    setLoading(false);
-    if (result.state === "connected") {
-      await refresh(result.message);
-      setScreen({ name: "weixinBinding", channelId: result.channel.id });
-      return;
-    }
-    setFlash({ kind: result.state === "failed" ? "error" : "info", message: result.message });
+    await checkWeixinLoginResult();
   };
 
   const handleWeixinBindingInput = async (input: string, enter: boolean): Promise<void> => {
@@ -433,6 +461,21 @@ export function ChatCodexTui({ actions, onDone }: ChatCodexTuiProps): React.JSX.
       return;
     }
     const picked = numericPick(input, choices.selectable.length);
+    if (enter && selected >= choices.selectable.length) {
+      const actionIndex = selected - choices.selectable.length;
+      if (actionIndex === 0) {
+        await handleWeixinPrimaryResult(actions.setWeixinPrimaryNew(channel));
+        return;
+      }
+      if (actionIndex === 1) {
+        setScreen({ name: "manualSession", target: { kind: "weixinPrimary", channelId: channel.id } });
+        return;
+      }
+      if (actionIndex === 2) {
+        await handleWeixinPrimaryResult(actions.setWeixinPrimaryNone(channel));
+        return;
+      }
+    }
     const choice = picked !== undefined ? choices.selectable[picked] : choices.selectable[selected];
     if ((enter || picked !== undefined) && choice) {
       await handleWeixinPrimaryResult(actions.setWeixinPrimaryExisting(channel, choice.id));
@@ -862,4 +905,10 @@ function nextFeishuStep(step: Extract<Screen, { name: "addFeishu" }>["step"]): E
 
 function defaultForFeishuStep(step: Extract<Screen, { name: "addFeishu" }>["step"]): string {
   return "";
+}
+
+function weixinAutoCheckIntervalMs(): number {
+  const raw = process.env.CHAT_CODEX_TUI_WEIXIN_LOGIN_CHECK_INTERVAL_MS;
+  const value = raw ? Number.parseInt(raw, 10) : 5_000;
+  return Number.isFinite(value) && value > 0 ? value : 5_000;
 }

@@ -220,12 +220,12 @@ export function ChannelRenameView({ channel, value, onChange, onSubmit }: { chan
 }
 
 export function AddWeixinView({ screen, loading }: { screen: Extract<Screen, { name: "addWeixin" }>; loading: boolean }): React.JSX.Element {
-  const subtitle = screen.login ? "Enter 检查登录结果  Esc 返回" : loading ? "正在获取二维码  Esc 返回" : "Enter 重试  Esc 返回";
+  const subtitle = screen.login ? "5 秒自动检查  Enter 立即检查  Esc 返回" : loading ? "正在获取二维码  Esc 返回" : "Enter 重试  Esc 返回";
   return (
     <Frame title="添加微信账号" subtitle={subtitle}>
       {!screen.login ? <Muted text={loading ? "正在发起扫码登录..." : "二维码未显示。按 Enter 重试，或按 Esc 返回。"} /> : (
         <>
-          <Text>请使用微信扫码，并在手机上确认。</Text>
+          <Text>请使用微信扫码，并在手机上确认；TUI 会每 5 秒自动检查登录结果。</Text>
           <Box marginY={1} flexDirection="column">
             {screen.login.qrCode ? screen.login.qrCode.split("\n").map((line, index) => <Text key={index}>{line}</Text>) : <Muted text="二维码渲染失败，请使用备用链接。" />}
           </Box>
@@ -254,12 +254,18 @@ export function AddFeishuView({ screen, onSubmit }: { screen: Extract<Screen, { 
 }
 
 export function WeixinBindingView({ channel, choices, selected }: { channel?: ChannelInstanceRecord; choices?: SessionChoices; selected: number }): React.JSX.Element {
-  // fixed: Frame(4) + 2 KeyValues(2) + section header(3) + footer(2) = 11
-  const viewportRows = useViewportRows(11);
+  // fixed: Frame(4) + 2 KeyValues(2) + session section(3) + action section(6) + footer(2) = 17
+  const viewportRows = useViewportRows(17);
   const selectable = choices?.selectable ?? [];
   const sw = visibleWindow(selectable, selected, viewportRows);
+  const actionOffset = selectable.length;
+  const actions = [
+    ["n. 新建 Codex session", "推荐：收到第一条微信私聊后创建"],
+    ["m. 手动输入 Session ID", "绑定已有 Codex session"],
+    ["0. 暂不绑定", "首条消息自动创建"],
+  ];
   return (
-    <Frame title="微信主聊天绑定" subtitle="Enter 绑定  n 新建  m 手动输入  0 暂不绑定">
+    <Frame title="微信主聊天绑定" subtitle="↑↓ 选择  Enter 执行  n 新建  m 手动输入  0 暂不绑定">
       {channel ? <KeyValue label="渠道实例" value={channel.id} /> : <Muted text="这个微信渠道已经不存在。" />}
       {channel?.defaultAccountId ? <KeyValue label="账号" value={channel.defaultAccountId} /> : null}
       <Section title="可选 session">
@@ -270,6 +276,17 @@ export function WeixinBindingView({ channel, choices, selected }: { channel?: Ch
             <ScrollHint above={0} below={sw.below} />
           </>
         ) : <Muted text="暂无可选历史 session。" />}
+      </Section>
+      <Section title="直接操作">
+        {actions.map(([label, value], index) => (
+          <ListRow
+            key={label}
+            active={selected === actionOffset + index}
+            left={label}
+            right={value}
+            tone={index === 0 ? "success" : undefined}
+          />
+        ))}
       </Section>
       {choices?.unavailable.length ? (
         <Section title="不可选（已绑定其他聊天）">
