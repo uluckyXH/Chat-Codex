@@ -7,6 +7,11 @@ import type { BridgeDelivery } from "./delivery.js";
 import { PairingCodeManager, parsePairingCodeInput } from "./pairing-code-manager.js";
 import type { RouteTrustMode } from "./bridge-types.js";
 
+export const ROUTE_PAIRING_REQUIRED_CHANNEL_TEXT = [
+  "当前聊天还没有完成 Chat-Codex 配对。",
+  "请查看运行 chat-codex 的终端/TUI 日志中的配对码，然后在当前聊天发送 /pair <配对码> 完成配对。",
+].join("\n");
+
 export interface RouteTrustGateOptions {
   state: MemoryStateStore;
   delivery: BridgeDelivery;
@@ -67,10 +72,12 @@ export class RouteTrustGate {
       if (verified.reason === "expired" || verified.reason === "locked" || verified.reason === "missing") {
         this.logChallenge(message, target);
       }
+      await this.delivery.sendText(target, pairingFailedChannelText(verified.reason));
       return { action: "handled", reason: "pair_failed" };
     }
 
     this.logChallenge(message, target);
+    await this.delivery.sendText(target, ROUTE_PAIRING_REQUIRED_CHANNEL_TEXT);
     return { action: "handled", reason: "challenge_created" };
   }
 
@@ -154,4 +161,12 @@ function formatPairingFailureReason(reason: string): string {
   if (reason === "locked") return "错误次数过多，已重新生成配对码";
   if (reason === "missing") return "没有可用配对码";
   return "配对码不正确";
+}
+
+function pairingFailedChannelText(reason: string): string {
+  if (reason === "missing") return ROUTE_PAIRING_REQUIRED_CHANNEL_TEXT;
+  return [
+    `Chat-Codex 配对失败：${formatPairingFailureReason(reason)}。`,
+    "请查看运行 chat-codex 的终端/TUI 日志，确认最新配对码后重新发送 /pair <配对码>。",
+  ].join("\n");
 }

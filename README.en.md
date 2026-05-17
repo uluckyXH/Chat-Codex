@@ -60,7 +60,10 @@ The core goal is to make Codex usable from chat windows while keeping routes, se
 ## Installation
 
 ```bash
+# Install Chat-Codex globally
 npm install -g chat-codex
+
+# Start the TUI
 chat-codex
 ```
 
@@ -77,6 +80,16 @@ codex
 ```
 
 On first launch, follow the TUI to check Codex, manage channels, bind chats, and start the service.
+
+### First-time Pairing
+
+Chat-Codex enables pairing protection for real Weixin and Feishu chats by default. When a Weixin contact or Feishu private chat uses it for the first time, the chat receives a pairing prompt. Go back to the terminal/TUI running `chat-codex`, copy the pairing code, then send this in the original chat:
+
+```text
+/pair <code>
+```
+
+After pairing succeeds, that chat is stored as a trusted route and remains usable after restarts. Pairing is scoped per chat route: different Weixin contacts and different Feishu private `chat_id` values each need to be paired once.
 
 ## Tech Stack
 

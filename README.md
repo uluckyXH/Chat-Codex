@@ -61,7 +61,10 @@ Chat-Codex 是一个轻量的聊天渠道中间件，用来把微信和飞书里
 ## 安装使用
 
 ```bash
+# 全局安装 Chat-Codex
 npm install -g chat-codex
+
+# 启动 TUI
 chat-codex
 ```
 
@@ -80,6 +83,16 @@ codex
 Windows 用户如果 PowerShell 里 `codex --version` 正常，但 Chat-Codex 首页显示 Codex CLI 不可用或报 `spawn codex ENOENT`，请参考 [Windows Codex CLI 排障指南](docs/windows-codex-cli-troubleshooting.zh-CN.md)。
 
 首次启动后按 TUI 引导完成 Codex 检查、渠道管理、聊天绑定和启动服务。
+
+### 首次配对
+
+Chat-Codex 对真实微信/飞书聊天默认启用配对保护。第一次从某个微信联系人或飞书私聊使用时，聊天里会收到配对提示；请回到运行 `chat-codex` 的终端/TUI 查看配对码，然后在原聊天里发送：
+
+```text
+/pair <配对码>
+```
+
+配对成功后，该聊天会被记为可信 route，后续重启后仍可继续使用。配对按聊天 route 独立生效：不同微信联系人、不同飞书私聊 `chat_id` 都需要分别配对一次。
 
 ## 运行数据与环境变量
 

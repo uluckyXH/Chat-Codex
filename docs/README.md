@@ -65,7 +65,7 @@
   Codex 进度噪声控制设计。说明如何识别命令长输出、等待转圈、低信息增量，并通过 app-server adapter 摘要化和 Bridge delivery 限流，避免微信、飞书和 TUI 日志被进度刷屏。
 
 - `route-pairing-trust-design.zh-CN.md`
-  渠道会话配对信任设计。说明微信/飞书新聊天 route 如何通过本机 TUI/终端配对码完成信任，未配对前不创建 session、不执行命令、不回复普通消息，并按 routeKey 持久化已信任聊天。
+  渠道会话配对信任设计。说明微信/飞书新聊天 route 如何通过本机 TUI/终端配对码完成信任，未配对前不创建 session、不执行命令，只回复不含配对码的配对引导，并按 routeKey 持久化已信任聊天。
 
 - `windows-compatibility.zh-CN.md`
   Windows Codex 接入兼容性设计。说明 Windows 下 Codex CLI 子进程解析、npm shim、`spawn codex ENOENT` 已知问题、`CHAT_CODEX_BIN` 覆盖入口，以及传给 Codex 的本地路径边界。
