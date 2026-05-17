@@ -18,6 +18,13 @@ export interface RuntimeLogEntry {
   message: string;
 }
 
+interface RuntimeLogLine {
+  key: string;
+  text: string;
+  color?: string;
+  wrap?: "wrap";
+}
+
 export interface RuntimeLogSummary {
   title: string;
   channels: string[];
@@ -108,25 +115,31 @@ export function RuntimeLogView({ summary, store, interactive = true }: { summary
   const [scrollOffset, setScrollOffset] = useState(0);
   useEffect(() => store.subscribe(() => setLogs(store.snapshot())), [store]);
   // fixed: Frame(4) + "运行状态" section(3) + status line(1) + "服务" section(3) + 6 KeyValues(6) + "日志" section(3) + footer(2) = 22
-  const { rows } = useWindowSize();
-  const visibleCount = Math.max(5, rows - 22);
+  const { columns, rows } = useWindowSize();
+  const visibleRows = Math.max(5, rows - 22);
+  const logLineWidth = Math.max(24, columns - 10);
+  const renderedLogLines = useMemo(() => logs.flatMap((entry) => runtimeLogLines(entry, logLineWidth)), [logs, logLineWidth]);
   useInput((input, key) => {
-    const maxScroll = Math.max(0, logs.length - visibleCount);
-    const pageKey = key as typeof key & { pageUp?: boolean; pageDown?: boolean; end?: boolean };
-    if (key.upArrow) {
+    const maxScroll = Math.max(0, renderedLogLines.length - visibleRows);
+    const pageKey = key as typeof key & { pageUp?: boolean; pageDown?: boolean; home?: boolean; end?: boolean };
+    if (key.upArrow || input === "k") {
       setScrollOffset((value) => Math.min(maxScroll, value + 1));
       return;
     }
-    if (key.downArrow) {
+    if (key.downArrow || input === "j") {
       setScrollOffset((value) => Math.max(0, value - 1));
       return;
     }
     if (pageKey.pageUp) {
-      setScrollOffset((value) => Math.min(maxScroll, value + visibleCount));
+      setScrollOffset((value) => Math.min(maxScroll, value + visibleRows));
       return;
     }
     if (pageKey.pageDown) {
-      setScrollOffset((value) => Math.max(0, value - visibleCount));
+      setScrollOffset((value) => Math.max(0, value - visibleRows));
+      return;
+    }
+    if (pageKey.home) {
+      setScrollOffset(maxScroll);
       return;
     }
     if (pageKey.end) {
@@ -139,12 +152,14 @@ export function RuntimeLogView({ summary, store, interactive = true }: { summary
     }
   }, { isActive: interactive });
   useEffect(() => {
-    setScrollOffset((value) => Math.min(value, Math.max(0, logs.length - visibleCount)));
-  }, [logs.length]);
-  const visibleLogs = useMemo(() => {
-    const end = Math.max(0, logs.length - scrollOffset);
-    return logs.slice(Math.max(0, end - visibleCount), end);
-  }, [logs, scrollOffset]);
+    setScrollOffset((value) => Math.min(value, Math.max(0, renderedLogLines.length - visibleRows)));
+  }, [renderedLogLines.length, visibleRows]);
+  const visibleLogLines = useMemo(() => {
+    const end = Math.max(0, renderedLogLines.length - scrollOffset);
+    return renderedLogLines.slice(Math.max(0, end - visibleRows), end);
+  }, [renderedLogLines, scrollOffset, visibleRows]);
+  const hiddenAbove = Math.max(0, renderedLogLines.length - visibleRows - scrollOffset);
+  const hiddenBelow = Math.max(0, scrollOffset);
   return (
     <Box flexDirection="column">
       <Frame title={summary.title} subtitle="已启动  Ctrl+C 停止" borderColor={THEME.success}>
@@ -160,12 +175,16 @@ export function RuntimeLogView({ summary, store, interactive = true }: { summary
           <KeyValue label="工作目录" value={summary.cwd} />
         </Section>
         <Section title="日志">
-          {visibleLogs.length ? visibleLogs.map((entry) => <RuntimeLogRow key={entry.id} entry={entry} />) : <Muted text="暂无消息。启动后在微信或飞书里发消息，日志会显示在这里。" />}
+          {hiddenAbove > 0 ? <Text color={THEME.muted}>  ↑ 还有 {hiddenAbove} 行</Text> : null}
+          {visibleLogLines.length ? visibleLogLines.map((line) => (
+            <Text key={line.key} color={line.color} wrap={line.wrap}>{line.text}</Text>
+          )) : <Muted text="暂无消息。启动后在微信或飞书里发消息，日志会显示在这里。" />}
+          {hiddenBelow > 0 ? <Text color={THEME.muted}>  ↓ 还有 {hiddenBelow} 行</Text> : null}
         </Section>
       </Frame>
       <Box marginTop={1} flexDirection="column">
         <Text color={THEME.muted}>等待微信 / 飞书消息。收到消息、回复、进度和媒体发送都会在这里追加。</Text>
-        <Text color={THEME.muted}>↑↓ 滚动  PgUp/PgDn 翻页  End 最新  c 清屏  Ctrl+C 停止服务</Text>
+        <Text color={THEME.muted}>↑↓/j/k 滚动  PgUp/PgDn 翻页  Home 最早  End 最新  c 清屏  Ctrl+C 停止服务</Text>
       </Box>
     </Box>
   );
@@ -178,24 +197,24 @@ function formatRuntimeCodexStatus(status?: CodexCliStatus): string {
   return `${state}，${version}，${status.codexBin}，${formatCodexCommandSource(status.codexBinSource)}`;
 }
 
-function RuntimeLogRow({ entry }: { entry: RuntimeLogEntry }): React.JSX.Element {
-  const color = entry.kind === "error"
-    ? THEME.danger
-    : entry.kind === "inbound"
-      ? THEME.inbound
-      : entry.kind === "outbound"
-        ? THEME.outbound
-        : entry.kind === "progress"
-          ? THEME.progressLog
-          : entry.kind === "media"
-            ? THEME.media
-            : THEME.muted;
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text color={color}>{formatLocalClock(entry.time)}  {kindLabel(entry.kind)}  {entry.source}</Text>
-      {(entry.message.trim() || "空消息").split(/\r?\n/).map((line, index) => <Text key={index} wrap="wrap">  {line}</Text>)}
-    </Box>
-  );
+function runtimeLogLines(entry: RuntimeLogEntry, width: number): RuntimeLogLine[] {
+  const color = runtimeLogColor(entry.kind);
+  const rawLines = (entry.message.trim() || "空消息").split(/\r?\n/);
+  const bodyLines = rawLines.flatMap((line) => wrapRuntimeLogText(`  ${line}`, width));
+  return [
+    { key: `${entry.id}:header`, text: `${formatLocalClock(entry.time)}  ${kindLabel(entry.kind)}  ${entry.source}`, color },
+    ...bodyLines.map((line, index) => ({ key: `${entry.id}:body:${index}`, text: line, wrap: "wrap" as const })),
+    { key: `${entry.id}:spacer`, text: "" },
+  ];
+}
+
+function runtimeLogColor(kind: RuntimeLogKind): string {
+  if (kind === "error") return THEME.danger;
+  if (kind === "inbound") return THEME.inbound;
+  if (kind === "outbound") return THEME.outbound;
+  if (kind === "progress") return THEME.progressLog;
+  if (kind === "media") return THEME.media;
+  return THEME.muted;
 }
 
 function kindLabel(kind: RuntimeLogKind): string {
@@ -245,4 +264,54 @@ function formatMetaValue(value: unknown): string {
   if (value === undefined) return "undefined";
   if (value === null) return "null";
   return JSON.stringify(value);
+}
+
+function wrapRuntimeLogText(value: string, width: number): string[] {
+  const lines: string[] = [];
+  let current = "";
+  let currentWidth = 0;
+  const maxWidth = Math.max(8, width);
+  for (const char of Array.from(value)) {
+    const nextWidth = runtimeCharWidth(char);
+    if (current && currentWidth + nextWidth > maxWidth) {
+      lines.push(current);
+      current = "";
+      currentWidth = 0;
+    }
+    current += char;
+    currentWidth += nextWidth;
+  }
+  lines.push(current);
+  return lines;
+}
+
+function runtimeCharWidth(char: string): number {
+  const code = char.codePointAt(0) ?? 0;
+  if (isCombining(code)) return 0;
+  return isFullwidth(code) ? 2 : 1;
+}
+
+function isCombining(code: number): boolean {
+  return (code >= 0x0300 && code <= 0x036f)
+    || (code >= 0x1ab0 && code <= 0x1aff)
+    || (code >= 0x1dc0 && code <= 0x1dff)
+    || (code >= 0x20d0 && code <= 0x20ff)
+    || (code >= 0xfe00 && code <= 0xfe0f);
+}
+
+function isFullwidth(code: number): boolean {
+  return code >= 0x1100 && (
+    code <= 0x115f
+    || code === 0x2329
+    || code === 0x232a
+    || (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f)
+    || (code >= 0xac00 && code <= 0xd7a3)
+    || (code >= 0xf900 && code <= 0xfaff)
+    || (code >= 0xfe10 && code <= 0xfe19)
+    || (code >= 0xfe30 && code <= 0xfe6f)
+    || (code >= 0xff00 && code <= 0xff60)
+    || (code >= 0xffe0 && code <= 0xffe6)
+    || (code >= 0x1f300 && code <= 0x1f64f)
+    || (code >= 0x1f900 && code <= 0x1f9ff)
+  );
 }

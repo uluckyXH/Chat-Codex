@@ -384,6 +384,36 @@ test("Runtime TUI keeps full log messages and caps store at 300 entries", async 
   view.unmount();
 });
 
+test("Runtime TUI scrolls log content by rendered lines", async () => {
+  const store = new RuntimeLogStore();
+  for (let index = 0; index < 24; index += 1) {
+    store.add("progress", "TEST", `log-${index}`);
+  }
+  const view = render(<RuntimeLogView summary={{
+    title: `${expectedChatCodexTitle()} 运行中`,
+    channels: ["feishu-default"],
+    cwd: "/repo",
+    policy: { permissionMode: "approval", sandbox: "workspace-write" },
+    routePolicy: "首条消息自动创建新 session",
+    codexStatus: codexStatusFixture(),
+  }} store={store} />);
+  await waitForInk();
+
+  assert.match(cleanFrame(view), /log-23/);
+  assert.doesNotMatch(cleanFrame(view), /log-0/);
+
+  for (let index = 0; index < 80; index += 1) view.stdin.write("k");
+  await waitForInk();
+  assert.match(cleanFrame(view), /log-0/);
+  assert.match(cleanFrame(view), /↓ 还有/);
+
+  for (let index = 0; index < 80; index += 1) view.stdin.write("j");
+  await waitForInk();
+  assert.match(cleanFrame(view), /log-23/);
+
+  view.unmount();
+});
+
 test("Runtime TUI exits on Ctrl+C signal so Bridge can stop", async () => {
   const store = new RuntimeLogStore();
   const stdout = new Writable({
