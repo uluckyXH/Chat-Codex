@@ -10,6 +10,7 @@ import type {
   UnboundRoutePolicy,
 } from "./bridge-types.js";
 import { ROUTE_BUSY_MUTATION_REJECT_TEXT } from "./bridge-types.js";
+import { formatAppConversationTitle } from "./app-conversation.js";
 import {
   formatCollaborationModeForStatus,
   isCancelSessionSelectionText,
@@ -103,6 +104,28 @@ export class BridgeSessionFlow {
       "Status: idle",
       `Mode: ${this.collaborationModeForRoute(message.routeKey, session.id)}`,
     ].join("\n"));
+    return session;
+  }
+
+  async createNewAppChatSession(
+    message: ChannelMessage,
+    target: ChannelTarget,
+    options: { firstPrompt?: string } = {},
+  ): Promise<CodexSession> {
+    const title = formatAppConversationTitle(message, target);
+    const session = await this.codex.startSession({
+      routeKey: message.routeKey,
+      cwd: this.cwd,
+      title,
+    });
+    this.state.bindSession(message.routeKey, session);
+    this.applyStoredSessionRunPolicy(session.id);
+    this.selections.delete(message.routeKey);
+    this.clearPendingInitialRouteBindingIfApplies(message);
+    this.applyRouteCollaborationModeToSession(message.routeKey, session.id);
+    const titleSync = await this.syncAppConversationTitle(session.id, title);
+    const previewSync = await this.syncAppConversationPreview(session.id, options.firstPrompt || title);
+    await this.delivery.sendText(target, this.newAppChatSessionText(session, title, titleSync, previewSync, Boolean(options.firstPrompt)));
     return session;
   }
 
@@ -272,6 +295,67 @@ export class BridgeSessionFlow {
       if (claim.newlyClaimed) this.state.rollbackSessionOwnerClaim(message.routeKey, sessionId);
       return { ok: false, reason: "resume_failed", message: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  private async syncAppConversationTitle(
+    sessionId: string,
+    title: string,
+  ): Promise<{ type: "synced" } | { type: "unsupported" } | { type: "failed"; message: string }> {
+    if (!this.codex.setSessionTitle) return { type: "unsupported" };
+    try {
+      await this.codex.setSessionTitle(sessionId, title);
+      return { type: "synced" };
+    } catch (error) {
+      return { type: "failed", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  private async syncAppConversationPreview(
+    sessionId: string,
+    preview: string,
+  ): Promise<{ type: "synced" } | { type: "unsupported" } | { type: "failed"; message: string }> {
+    if (!this.codex.setSessionPreview) return { type: "unsupported" };
+    try {
+      await this.codex.setSessionPreview(sessionId, preview);
+      return { type: "synced" };
+    } catch (error) {
+      return { type: "failed", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  private newAppChatSessionText(
+    session: CodexSession,
+    title: string,
+    titleSync: { type: "synced" } | { type: "unsupported" } | { type: "failed"; message: string },
+    previewSync: { type: "synced" } | { type: "unsupported" } | { type: "failed"; message: string },
+    hasFirstPrompt: boolean,
+  ): string {
+    const lines = [
+      titleSync.type === "unsupported"
+        ? "已创建 Codex session，但当前 Codex adapter 不支持同步 App 对话标题。"
+        : "已创建 Codex App 对话",
+      "",
+      `Session: ${session.id}`,
+      `标题: ${title}`,
+      `工作目录: ${session.cwd}`,
+    ];
+    if (titleSync.type === "failed") {
+      lines.push("", `标题同步失败: ${titleSync.message}`);
+    }
+    if (previewSync.type === "failed") {
+      lines.push("", `App 列表 preview 同步失败: ${previewSync.message}`);
+    }
+    if (previewSync.type === "unsupported") {
+      lines.push("", "当前 Codex adapter 不支持同步 App 列表 preview，空会话可能不会立刻出现在 Codex App 对话列表中。");
+    }
+    lines.push(
+      "",
+      hasFirstPrompt
+        ? "正在把后续文本作为这个对话的第一条任务执行。"
+        : "已写入 Codex preview，空对话也应能进入 Codex App 对话列表。",
+      "如果 Codex App 已添加这个工作目录，会在 App 的对话列表中显示。",
+    );
+    return lines.join("\n");
   }
 
   private async consumePendingInitialRouteBinding(message: ChannelMessage): Promise<CodexSession> {

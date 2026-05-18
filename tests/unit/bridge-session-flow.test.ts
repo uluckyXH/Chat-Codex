@@ -20,6 +20,32 @@ test("BridgeSessionFlow creates new sessions in the startup cwd", async () => {
   assert.match(fixture.sentTexts.at(-1) ?? "", /Cwd: \/repo/);
 });
 
+test("BridgeSessionFlow creates Codex App chat sessions and syncs title", async () => {
+  const fixture = sessionFlowFixture({ cwd: "/repo" });
+
+  const session = await fixture.flow.createNewAppChatSession(message("route-a"), target("route-a"));
+
+  assert.equal(session.cwd, "/repo");
+  assert.equal(session.title, "mock / default / route-a");
+  assert.equal(fixture.state.getBinding("route-a")?.sessionId, session.id);
+  assert.deepEqual(fixture.codex.sessionTitles, [{ sessionId: session.id, title: "mock / default / route-a" }]);
+  assert.deepEqual(fixture.codex.sessionPreviews, [{ sessionId: session.id, preview: "mock / default / route-a" }]);
+  const text = fixture.sentTexts.at(-1) ?? "";
+  assert.match(text, /已创建 Codex App 对话/);
+  assert.match(text, /标题: mock \/ default \/ route-a/);
+  assert.match(text, /已写入 Codex preview/);
+});
+
+test("BridgeSessionFlow keeps app chat binding when title sync fails", async () => {
+  const codex = new FailingTitleCodexAdapter();
+  const fixture = sessionFlowFixture({ codex });
+
+  const session = await fixture.flow.createNewAppChatSession(message("route-a"), target("route-a"));
+
+  assert.equal(fixture.state.getBinding("route-a")?.sessionId, session.id);
+  assert.match(fixture.sentTexts.at(-1) ?? "", /标题同步失败: title sync failed/);
+});
+
 test("BridgeSessionFlow binds an existing session by id", async () => {
   const fixture = sessionFlowFixture();
   const existing = await fixture.codex.startSession({ routeKey: "seed", cwd: "/seed", title: "seed" });
@@ -95,6 +121,12 @@ function sessionFlowFixture(options: {
     syncRouteCollaborationModeFromSession: () => "default",
   });
   return { codex, state, flow, sentTexts };
+}
+
+class FailingTitleCodexAdapter extends MockCodexAdapter {
+  override async setSessionTitle(_sessionId: string, _title: string): Promise<void> {
+    throw new Error("title sync failed");
+  }
 }
 
 function message(routeKey: string): ChannelMessage {

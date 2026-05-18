@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -131,6 +132,14 @@ rl.on("line", (line) => {
   if (message.method === "thread/resume") {
     threadId = message.params.threadId;
     send({ id: message.id, result: { thread: thread(process.cwd()), cwd: process.cwd(), model: "fake", modelProvider: "openai", serviceTier: null, instructionSources: [], approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "workspaceWrite", writableRoots: [process.cwd()], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }, reasoningEffort: "medium" } });
+    return;
+  }
+  if (message.method === "thread/name/set") {
+    if (!message.params?.threadId || typeof message.params?.name !== "string") {
+      send({ id: message.id, error: { code: -32602, message: "invalid thread name params" } });
+      return;
+    }
+    send({ id: message.id, result: {} });
     return;
   }
   if (message.method === "thread/goal/get") {
@@ -351,6 +360,49 @@ test("AppServerCodexAdapter routes command approvals through resolveApproval", a
   assert.ok(events.some((event) => event.type === "approval.requested"));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "decision accept"));
   assert.ok(events.some((event) => event.type === "turn.completed"));
+});
+
+test("AppServerCodexAdapter sets thread names through app-server", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+
+  await adapter.setSessionTitle(session.id, "微信 / wx-main / 小黄");
+  const sessions = await adapter.listSessions("route-1");
+  await adapter.stop();
+
+  assert.equal(sessions[0]?.title, "微信 / wx-main / 小黄");
+});
+
+test("AppServerCodexAdapter fills empty Codex state previews", async (t) => {
+  if (spawnSync("sqlite3", ["--version"], { stdio: "ignore" }).status !== 0) {
+    t.skip("sqlite3 binary is not available");
+    return;
+  }
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root), codexHome: root });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const dbPath = path.join(root, "state_5.sqlite");
+  const setup = spawnSync("sqlite3", [dbPath, [
+    "CREATE TABLE threads (id TEXT PRIMARY KEY, preview TEXT NOT NULL, archived INTEGER NOT NULL);",
+    `INSERT INTO threads VALUES ('${session.id}', '', 0);`,
+  ].join(" ")], { encoding: "utf8" });
+  assert.equal(setup.status, 0, setup.stderr);
+
+  await adapter.setSessionPreview(session.id, "微信 / wx-main / 小黄");
+  await adapter.stop();
+
+  const query = spawnSync("sqlite3", ["-json", dbPath, "SELECT preview FROM threads WHERE id = 'thread-app-server-1'"], { encoding: "utf8" });
+  assert.equal(query.status, 0, query.stderr);
+  assert.deepEqual(JSON.parse(query.stdout), [{ preview: "微信 / wx-main / 小黄" }]);
 });
 
 test("AppServerCodexAdapter cancels pending approvals when interrupting a turn", async () => {

@@ -147,6 +147,7 @@ test("ExecCodexAdapter lists sqlite titles for discovered sessions", async (t) =
     "CREATE TABLE threads (",
     "id TEXT PRIMARY KEY,",
     "title TEXT NOT NULL,",
+    "preview TEXT NOT NULL,",
     "first_user_message TEXT NOT NULL,",
     "cwd TEXT NOT NULL,",
     "rollout_path TEXT NOT NULL,",
@@ -154,7 +155,7 @@ test("ExecCodexAdapter lists sqlite titles for discovered sessions", async (t) =
     "updated_at INTEGER NOT NULL,",
     "archived INTEGER NOT NULL",
     ");",
-    "INSERT INTO threads VALUES ('thread-title', '标题', '第一条', '/tmp/title', '/tmp/rollout.jsonl', 1778716800000, 1778716800, 0);",
+    "INSERT INTO threads VALUES ('thread-title', '标题', '第一条', '第一条', '/tmp/title', '/tmp/rollout.jsonl', 1778716800000, 1778716800, 0);",
   ].join(" ")], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   const adapter = new ExecCodexAdapter({ codexHome });

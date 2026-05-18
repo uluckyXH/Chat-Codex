@@ -34,6 +34,8 @@ export class MockCodexAdapter implements CodexAdapter {
   private readonly sessions = new Map<string, { session: CodexSession; routeKey: string; status: CodexSessionStatus }>();
   readonly resolvedApprovals: Array<{ approvalKey: string; decision: ApprovalDecision }> = [];
   readonly runs: Array<{ sessionId: string; prompt: string; collaborationMode?: CodexCollaborationMode }> = [];
+  readonly sessionTitles: Array<{ sessionId: string; title: string }> = [];
+  readonly sessionPreviews: Array<{ sessionId: string; preview: string }> = [];
   readonly compactedSessions: string[] = [];
   compactDelayMs = 0;
   compactError: Error | undefined;
@@ -54,6 +56,18 @@ export class MockCodexAdapter implements CodexAdapter {
       this.sessionCollaborationModes.set(session.id, this.defaultCollaborationMode);
     }
     return session;
+  }
+
+  async setSessionTitle(sessionId: string, title: string): Promise<void> {
+    const stored = this.sessions.get(sessionId);
+    if (!stored) throw new Error(`mock session not found: ${sessionId}`);
+    stored.session.title = title;
+    this.sessionTitles.push({ sessionId, title });
+  }
+
+  async setSessionPreview(sessionId: string, preview: string): Promise<void> {
+    this.ensureKnownSession(sessionId);
+    this.sessionPreviews.push({ sessionId, preview });
   }
 
   async resumeSession(sessionId: string): Promise<CodexSession> {

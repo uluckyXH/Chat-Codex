@@ -574,6 +574,28 @@ test("Bridge handles new session, prompt, status, and approval over mock channel
   assert.equal(codex.resolvedApprovals[0].decision, "approve");
 });
 
+test("Bridge creates Codex App chat sessions with optional first prompt", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new MockCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/new chat", { conversationId: "empty" });
+  await channel.emitText("/new chat 帮我总结这个项目", { conversationId: "with-prompt" });
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.equal(codex.sessionTitles.length, 2);
+  assert.deepEqual(codex.sessionPreviews.map((item) => item.preview), ["mock / mock-account / Mock Direct", "帮我总结这个项目"]);
+  assert.equal(codex.runs.length, 1);
+  assert.equal(codex.runs[0].sessionId, "mock-codex-2");
+  assert.equal(codex.runs[0].prompt, "帮我总结这个项目");
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("已创建 Codex App 对话")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("标题: mock / mock-account / Mock Direct")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("正在把后续文本作为这个对话的第一条任务执行")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("Mock Codex 回复: 帮我总结这个项目")));
+});
+
 test("Bridge handles compact confirmation and success over mock channel", async () => {
   const channel = new MockChannelAdapter({ typing: true });
   const codex = new ContextUsageCodexAdapter();
@@ -594,6 +616,7 @@ test("Bridge handles compact confirmation and success over mock channel", async 
   const confirmation = channel.sentMessages.find((message) => message.text.includes("即将压缩当前 Codex session"))?.text ?? "";
   const completed = channel.sentMessages.find((message) => message.text.includes("上下文压缩完成"))?.text ?? "";
   assert.equal(help.includes("```text"), false);
+  assert.equal(help.includes("/new chat"), false);
   assert.ok(help.includes("- `/compact`: 压缩当前 Codex session 的历史上下文。"));
   assert.ok(help.includes("  - `/compact confirm`: 确认并开始压缩。"));
   assert.ok(confirmation.includes("压缩前上下文: `164,171 / 258,400 token`"));

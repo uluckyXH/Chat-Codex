@@ -19,6 +19,7 @@ import type {
   CodexPromptInput,
 } from "./types.js";
 import { displayCodexSessionTitle, findCodexSessionById, type CodexRunPolicy } from "./codex-cli.js";
+import { ensureCodexStatePreviewIfEmpty } from "./codex-state-preview.js";
 import { resolveCodexCommand, type CodexCommandResolution } from "./codex-process.js";
 import { codexInputText } from "./input.js";
 import { approvalFromServerRequest, responseForApprovalDecision } from "./app-server/approval-handler.js";
@@ -199,6 +200,27 @@ export class AppServerCodexAdapter implements CodexAdapter {
     }
     this.sessionStore.mapThread(sessionId, session.id);
     return session;
+  }
+
+  async setSessionTitle(sessionId: string, title: string): Promise<void> {
+    await this.ensureStarted();
+    this.ensureKnownSession(sessionId);
+    await this.request<Record<string, unknown>>("thread/name/set", {
+      threadId: sessionId,
+      name: title,
+    });
+    const stored = this.sessionStore.get(sessionId);
+    if (stored) {
+      stored.session.title = title;
+      stored.updatedAt = new Date().toISOString();
+    }
+  }
+
+  async setSessionPreview(sessionId: string, preview: string): Promise<void> {
+    await this.ensureStarted();
+    this.ensureKnownSession(sessionId);
+    const result = await ensureCodexStatePreviewIfEmpty(sessionId, preview, { codexHome: this.codexHome });
+    if (!result.ok) throw new Error(result.message);
   }
 
   async *run(sessionId: string, prompt: CodexPromptInput, options: CodexRunOptions = {}): AsyncIterable<CodexEvent> {

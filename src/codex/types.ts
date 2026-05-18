@@ -153,6 +153,8 @@ export interface CodexAdapter {
   stop?(): Promise<void>;
   onBackgroundEvent?(handler: CodexBackgroundEventHandler): () => void;
   startSession(input: StartSessionInput): Promise<CodexSession>;
+  setSessionTitle?(sessionId: string, title: string): Promise<void>;
+  setSessionPreview?(sessionId: string, preview: string): Promise<void>;
   resumeSession(sessionId: string): Promise<CodexSession>;
   run(sessionId: string, prompt: CodexPromptInput, options?: CodexRunOptions): AsyncIterable<CodexEvent>;
   steer?(sessionId: string, prompt: CodexPromptInput): Promise<void>;

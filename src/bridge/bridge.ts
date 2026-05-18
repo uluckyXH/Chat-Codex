@@ -38,6 +38,7 @@ import { handleCollaborationModeCommand } from "./commands/collaboration-command
 import { handleCompactCommand } from "./commands/compact-command.js";
 import { handleGoalCommand } from "./commands/goal-command.js";
 import { handleModelCommand } from "./commands/model-command.js";
+import { handleNewSessionCommand } from "./commands/new-command.js";
 import { handlePermissionCommand } from "./commands/permission-command.js";
 import { handleProgressModeCommand } from "./commands/progress-command.js";
 import { handleSendFileCommand } from "./commands/sendfile-command.js";
@@ -204,7 +205,11 @@ export class Bridge {
       isRouteExecutionBusy: (routeKey) => this.isRouteExecutionBusy(routeKey),
       handlers: {
         help: (message) => this.statusTextRenderer.helpText(message),
-        createNewSession: (message, target) => this.sessionFlow.createNewSession(message, target),
+        createNewSession: (message, target, args, rawText) => handleNewSessionCommand({
+          sessionFlow: this.sessionFlow,
+          routeQueue: this.routeQueue,
+          routeSteering: this.routeSteering,
+        }, message, target, args, rawText),
         status: (message) => this.statusTextRenderer.statusText(message),
         sessions: (message, args, commandName) => this.statusTextRenderer.sessionsText(message, args, commandName),
         resumeOrUseSession: (message, target, sessionRef) => this.sessionFlow.resumeOrUseSession(message, target, sessionRef),

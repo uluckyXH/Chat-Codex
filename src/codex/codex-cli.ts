@@ -195,7 +195,7 @@ function readStateDbSessions(filePath: string): DiscoveredCodexSession[] {
       "-json",
       filePath,
       [
-        "SELECT id, title, first_user_message, cwd, rollout_path, updated_at_ms, updated_at",
+        "SELECT id, title, preview, first_user_message, cwd, rollout_path, updated_at_ms, updated_at",
         "FROM threads",
         "WHERE archived = 0",
         "ORDER BY updated_at DESC",
@@ -209,6 +209,7 @@ function readStateDbSessions(filePath: string): DiscoveredCodexSession[] {
     const rows = JSON.parse(result.stdout) as Array<{
       id?: string;
       title?: string;
+      preview?: string;
       first_user_message?: string;
       cwd?: string;
       rollout_path?: string;
@@ -219,12 +220,13 @@ function readStateDbSessions(filePath: string): DiscoveredCodexSession[] {
       .filter((row) => typeof row.id === "string" && row.id.length > 0)
       .map((row) => {
         const title = cleanText(row.title);
+        const preview = cleanText(row.preview);
         const firstUserMessage = cleanText(row.first_user_message);
-        const distinctTitle = title && title !== firstUserMessage ? title : undefined;
+        const distinctTitle = title && title !== (firstUserMessage ?? preview) ? title : undefined;
         return {
           id: row.id as string,
           threadName: distinctTitle,
-          preview: firstUserMessage ?? title,
+          preview: firstUserMessage ?? preview ?? title,
           cwd: cleanText(row.cwd),
           path: cleanText(row.rollout_path),
           updatedAt: sqliteTimeToIso(row.updated_at_ms, row.updated_at),

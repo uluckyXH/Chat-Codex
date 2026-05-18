@@ -10,7 +10,7 @@ import type { BridgeDelivery } from "./delivery.js";
 
 export interface BridgeCommandHandlers {
   help(message: ChannelMessage): string;
-  createNewSession(message: ChannelMessage, target: ChannelTarget): Promise<unknown>;
+  createNewSession(message: ChannelMessage, target: ChannelTarget, args: string[], rawText: string): Promise<unknown>;
   status(message: ChannelMessage): Promise<string>;
   sessions(message: ChannelMessage, args: string[], commandName: string): Promise<string>;
   resumeOrUseSession(message: ChannelMessage, target: ChannelTarget, sessionRef: string | undefined): Promise<void>;
@@ -86,7 +86,7 @@ export class BridgeCommandRouter {
         await this.delivery.sendText(target, this.handlers.help(message));
         return;
       case "new":
-        await this.handlers.createNewSession(message, target);
+        await this.handlers.createNewSession(message, target, args, rawText);
         return;
       case "status":
         await this.delivery.sendText(target, await this.handlers.status(message));

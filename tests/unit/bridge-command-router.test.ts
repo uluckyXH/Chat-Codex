@@ -46,6 +46,21 @@ test("BridgeCommandRouter rejects compact while route is busy", async () => {
   assert.equal(fixture.calls.compact, 0);
 });
 
+test("BridgeCommandRouter passes /new args and raw text to the handler", async () => {
+  const fixture = routerFixture();
+  await fixture.router.handle(message(), target(), "new", ["chat", "hello"], "/new chat hello");
+  assert.equal(fixture.calls.createNewSession, 1);
+  assert.deepEqual(fixture.newSessionCall?.args, ["chat", "hello"]);
+  assert.equal(fixture.newSessionCall?.rawText, "/new chat hello");
+});
+
+test("BridgeCommandRouter rejects /new chat while route is busy", async () => {
+  const fixture = routerFixture({ busy: true });
+  await fixture.router.handle(message(), target(), "new", ["chat"], "/new chat");
+  assert.match(fixture.sent.at(-1) ?? "", /当前对话的 Codex 正在执行/);
+  assert.equal(fixture.calls.createNewSession, 0);
+});
+
 test("BridgeCommandRouter lets non-mutating progress commands dispatch", async () => {
   const fixture = routerFixture();
   await fixture.router.handle(message(), target(), "progress", ["silent"], "/progress silent");
@@ -72,10 +87,12 @@ function routerFixture(options: {
 } = {}) {
   const sent: string[] = [];
   const calls = {
+    createNewSession: 0,
     model: 0,
     progressMode: 0,
     compact: 0,
   };
+  let newSessionCall: { args: string[]; rawText: string } | undefined;
   const delivery = new BridgeDelivery({
     channels: {
       sendText: async (_target: ChannelTarget, text: string) => {
@@ -89,7 +106,10 @@ function routerFixture(options: {
   });
   const handlers: BridgeCommandHandlers = {
     help: () => "help",
-    createNewSession: async () => undefined,
+    createNewSession: async (_message, _target, args, rawText) => {
+      calls.createNewSession += 1;
+      newSessionCall = { args, rawText };
+    },
     status: async () => "status",
     sessions: async () => "sessions",
     resumeOrUseSession: async () => undefined,
@@ -115,6 +135,9 @@ function routerFixture(options: {
   return {
     sent,
     calls,
+    get newSessionCall() {
+      return newSessionCall;
+    },
     router: new BridgeCommandRouter({
       logger: new SilentLogger(),
       delivery,
