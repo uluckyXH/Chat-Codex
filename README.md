@@ -47,6 +47,10 @@ Chat-Codex 是一个轻量的聊天渠道中间件，用来把微信和飞书里
 
 项目核心目标是让 Codex 可以自然地在聊天窗口里工作，同时避免多渠道、多聊天、多 session 之间的上下文串线。
 
+<p align="center">
+  <img src="docs/chat-codex-tui-screenshot.png" alt="Chat-Codex TUI 运行截图" width="900">
+</p>
+
 ## 能力概览
 
 - 统一 `chat-codex` 入口，使用 TUI 管理渠道、聊天绑定、权限和启动流程。
