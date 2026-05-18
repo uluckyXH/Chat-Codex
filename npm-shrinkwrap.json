@@ -1,12 +1,12 @@
 {
   "name": "chat-codex",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "chat-codex",
-      "version": "0.1.1",
+      "version": "0.1.3",
       "bundleDependencies": [
         "@larksuiteoapi/node-sdk"
       ],
