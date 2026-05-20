@@ -113,6 +113,130 @@ test("Bridge keeps Feishu pairing trust isolated by chat_id", async () => {
   assert.ok(channel.sentMessages.some((message) => message.target.conversation.id === "oc_b" && message.text.includes("还没有完成 Chat-Codex 配对")));
 });
 
+test("Bridge lets Feishu group members register before route pairing but blocks prompts until paired", async () => {
+  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const codex = new MockCodexAdapter();
+  const state = new MemoryStateStore();
+  const bridge = new Bridge({
+    channel,
+    codex,
+    state,
+    routeTrustMode: "real_channels",
+    pairingCodeManager: new PairingCodeManager({ codeGenerator: () => "GRP-123" }),
+    feishuGroupMemberStateRootDir: fs.mkdtempSync(path.join(os.tmpdir(), "codex-group-pairing-members-")),
+  });
+
+  await bridge.start();
+  await channel.emitText("/name 小黄", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+  });
+  await channel.emitText("先执行一下", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+  });
+  await bridge.waitForIdle();
+
+  assert.equal(codex.runs.length, 0);
+  assert.equal(state.isRouteTrusted("feishu:default:group:oc_group"), false);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("已记录你在当前群的展示名：小黄")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("还没有完成 Chat-Codex 配对")));
+
+  await channel.emitText("/pair GRP-123", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+  });
+  await channel.emitText("现在执行", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+  });
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.equal(state.isRouteTrusted("feishu:default:group:oc_group"), true);
+  assert.equal(state.getGroupAccess("feishu:default:group:oc_group")?.superAdmin?.senderId, "ou_xh");
+  assert.equal(state.getGroupAccess("feishu:default:group:oc_group")?.approvalPolicy, "super_admin_only");
+  assert.equal(codex.runs.at(-1)?.prompt, "小黄说：现在执行");
+});
+
+test("Bridge persists Feishu group pairer as super admin and shows it in whoami", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-group-access-"));
+  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const codex = new MockCodexAdapter();
+  const state = new FileStateStore({ rootDir });
+  const bridge = new Bridge({
+    channel,
+    codex,
+    state,
+    routeTrustMode: "real_channels",
+    pairingCodeManager: new PairingCodeManager({ codeGenerator: () => "ADM-123" }),
+    feishuGroupMemberStateRootDir: fs.mkdtempSync(path.join(os.tmpdir(), "codex-group-access-members-")),
+  });
+
+  await bridge.start();
+  await channel.emitText("先触发配对", {
+    conversationKind: "group",
+    conversationId: "oc_group_admin",
+    senderId: "ou_admin",
+  });
+  await channel.emitText("/pair ADM-123", {
+    conversationKind: "group",
+    conversationId: "oc_group_admin",
+    senderId: "ou_admin",
+  });
+  await channel.emitText("/whoami", {
+    conversationKind: "group",
+    conversationId: "oc_group_admin",
+    senderId: "ou_admin",
+  });
+  await bridge.stop();
+
+  const routeKey = "feishu:default:group:oc_group_admin";
+  assert.equal(new FileStateStore({ rootDir }).getGroupAccess(routeKey)?.superAdmin?.senderId, "ou_admin");
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("群角色: 超级管理员")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("审批策略: 仅超级管理员")));
+});
+
+test("Bridge only lets the Feishu group super admin resolve approvals by default", async () => {
+  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const codex = new MockCodexAdapter();
+  const state = new MemoryStateStore();
+  const bridge = new Bridge({
+    channel,
+    codex,
+    state,
+    routeTrustMode: "real_channels",
+    pairingCodeManager: new PairingCodeManager({ codeGenerator: () => "APP-123" }),
+    feishuGroupMemberStateRootDir: fs.mkdtempSync(path.join(os.tmpdir(), "codex-group-approval-members-")),
+  });
+
+  const group = {
+    conversationKind: "group" as const,
+    conversationId: "oc_group_approval",
+  };
+  await bridge.start();
+  await channel.emitText("触发群配对", { ...group, senderId: "ou_admin" });
+  await channel.emitText("/pair APP-123", { ...group, senderId: "ou_admin" });
+  await channel.emitText("/name 管理员", { ...group, senderId: "ou_admin" });
+  await channel.emitText("/name 普通成员", { ...group, senderId: "ou_member" });
+  await channel.emitText("请触发审批 approval", { ...group, senderId: "ou_admin" });
+  await bridge.waitForIdle();
+
+  await channel.emitText("/OK", { ...group, senderId: "ou_member" });
+  assert.equal(codex.resolvedApprovals.length, 0);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("默认只允许超级管理员")));
+
+  await channel.emitText("/OK", { ...group, senderId: "ou_admin" });
+  await bridge.stop();
+
+  assert.equal(codex.resolvedApprovals.length, 1);
+  assert.equal(codex.resolvedApprovals[0]?.decision, "approve");
+});
+
 test("Bridge does not consume Weixin pending primary binding before route pairing", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-pairing-pending-"));
   const channelId = "weixin-main";

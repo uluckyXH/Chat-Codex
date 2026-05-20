@@ -139,29 +139,6 @@ export interface FeishuSdkClient {
       }): Promise<FeishuApiResponse>;
     };
   };
-  contact?: {
-    user?: {
-      get(payload: {
-        path: {
-          user_id: string;
-        };
-        params: {
-          user_id_type: "open_id" | "user_id" | "union_id";
-        };
-      }): Promise<FeishuApiResponse<{
-        user?: {
-          name?: string;
-          display_name?: string;
-          nickname?: string;
-          en_name?: string;
-        };
-        name?: string;
-        display_name?: string;
-        nickname?: string;
-        en_name?: string;
-      }>>;
-    };
-  };
   request?<T = FeishuApiResponse>(payload: {
     method: string;
     url: string;

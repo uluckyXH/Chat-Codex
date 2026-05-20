@@ -7,6 +7,8 @@ import { Bridge } from "../../src/bridge/bridge.js";
 import { MockChannelAdapter } from "../../src/channels/mock/mock-channel-adapter.js";
 import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
 import { SilentLogger } from "../../src/logging/logger.js";
+import type { TranscriptSink } from "../../src/logging/transcript.js";
+import type { ChannelMessage } from "../../src/protocol/channel.js";
 import { FileStateStore } from "../../src/state/file-state-store.js";
 
 test("Bridge restores route session binding from FileStateStore after restart", async () => {
@@ -88,6 +90,43 @@ test("Bridge applies persisted session run policy when restoring a binding", asy
 
   assert.equal(codex.getRunPolicy(session.id).permissionMode, "full");
   assert.equal(codex.runs.at(-1)?.sessionId, session.id);
+});
+
+test("Bridge strips Feishu direct sender display names before runtime display", async () => {
+  const codex = new MockCodexAdapter();
+  const channel = new MockChannelAdapter({ id: "feishu-main", accountId: "default" });
+  let inboundSenderDisplayName: string | undefined = "not-called";
+  const transcript: TranscriptSink = {
+    inbound: (message) => {
+      inboundSenderDisplayName = message.sender.displayName;
+    },
+    outbound: () => undefined,
+  };
+  const bridge = new Bridge({
+    channel,
+    codex,
+    state: new FileStateStore({ rootDir: fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-feishu-name-")) }),
+    logger: new SilentLogger(),
+    transcript,
+    cwd: "/tmp/work",
+  });
+  const message: ChannelMessage = {
+    id: "om_named_direct",
+    routeKey: "feishu-main:default:direct:oc_user",
+    channelId: "feishu-main",
+    accountId: "default",
+    sender: { id: "ou_user", displayName: "张三" },
+    conversation: { id: "oc_user", kind: "direct", displayName: "飞书私聊" },
+    text: "你好",
+    timestamp: "2026-05-20T00:00:00.000Z",
+  };
+
+  await bridge.handleMessage(message);
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.equal(inboundSenderDisplayName, undefined);
+  assert.equal(codex.runs[0]?.prompt, "你好");
 });
 
 test("Bridge consumes persisted Weixin pending binding on first private chat", async () => {

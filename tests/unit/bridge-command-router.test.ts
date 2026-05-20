@@ -156,6 +156,7 @@ function routerFixture(options: {
       calls.groupReceive += 1;
       groupReceiveCall = { args, commandName };
     },
+    groupName: async () => undefined,
     sendFile: async () => undefined,
     model: async () => {
       calls.model += 1;

@@ -305,7 +305,9 @@ export class LauncherActions {
         accountId: route.accountId,
         conversationKind: route.conversationKind,
         conversationId: route.conversationId,
-        displayName: route.displayName ?? route.identity?.lastSenderDisplayName,
+        displayName: isFeishuDirectRoute(route)
+          ? route.displayName
+          : route.displayName ?? route.identity?.lastSenderDisplayName,
         trustedAt: now,
         trustedBySenderId: "local-tui",
         trustedBySenderDisplayName: "本机 TUI",
@@ -685,6 +687,15 @@ function comparePairingRoutes(left: PairingRouteSummary, right: PairingRouteSumm
   return timestampForPairing(right) - timestampForPairing(left)
     || left.label.localeCompare(right.label, "zh-Hans-CN")
     || left.route.routeKey.localeCompare(right.route.routeKey);
+}
+
+function isFeishuDirectRoute(route: RouteRecord): boolean {
+  return route.conversationKind === "direct"
+    && (route.channelType === "feishu"
+      || route.channelId === "feishu"
+      || route.channelId.startsWith("feishu-")
+      || route.channelId === "lark"
+      || route.channelId.startsWith("lark-"));
 }
 
 function timestampForPairing(route: PairingRouteSummary): number {

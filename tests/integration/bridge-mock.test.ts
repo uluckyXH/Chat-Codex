@@ -1041,9 +1041,15 @@ test("Bridge steers ordinary text into the active route turn", async () => {
 test("Bridge prefixes only group ordinary prompts with speaker names", async () => {
   const channel = new MockChannelAdapter({ id: "feishu", accountId: "work" });
   const codex = new SteerableBlockingCodexAdapter();
-  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), feishuGroupMemberStateRootDir: tempStateRoot("bridge-group-members-") });
 
   await bridge.start();
+  await channel.emitText("/name 小黄", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+    senderDisplayName: "小黄",
+  });
   await channel.emitText("/status", {
     conversationKind: "group",
     conversationId: "oc_group",
@@ -1071,10 +1077,16 @@ test("Bridge prefixes only group ordinary prompts with speaker names", async () 
 test("Bridge prefixes group media prompts while preserving attachments", async () => {
   const channel = new MockChannelAdapter({ id: "feishu", accountId: "work" });
   const codex = new SteerableBlockingCodexAdapter();
-  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), feishuGroupMemberStateRootDir: tempStateRoot("bridge-group-media-members-") });
   const imagePath = "/tmp/chat-codex-group-direct.png";
 
   await bridge.start();
+  await channel.emitText("/name 小黄", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+    senderDisplayName: "小黄",
+  });
   await channel.emitAttachment([mockImageAttachment(imagePath)], {
     text: "检查这个 UI",
     conversationKind: "group",
@@ -1095,9 +1107,21 @@ test("Bridge prefixes group media prompts while preserving attachments", async (
 test("Bridge prefixes group mid-turn steers as speaker supplements", async () => {
   const channel = new MockChannelAdapter({ id: "feishu", accountId: "work" });
   const codex = new SteerableBlockingCodexAdapter();
-  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), steerDebounceMs: 1 });
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), steerDebounceMs: 1, feishuGroupMemberStateRootDir: tempStateRoot("bridge-group-steer-members-") });
 
   await bridge.start();
+  await channel.emitText("/name 小黄", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+    senderDisplayName: "小黄",
+  });
+  await channel.emitText("/name 小红", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xr",
+    senderDisplayName: "小红",
+  });
   await channel.emitText("第一条", {
     conversationKind: "group",
     conversationId: "oc_group",
@@ -1119,6 +1143,73 @@ test("Bridge prefixes group mid-turn steers as speaker supplements", async () =>
 
   assert.deepEqual(codex.prompts, ["小黄说：第一条"]);
   assert.equal(codex.steers[0]?.prompt, "小红补充：补充信息");
+});
+
+test("Bridge requires Feishu group member registration before ordinary prompts", async () => {
+  const channel = new MockChannelAdapter({ id: "feishu", accountId: "work" });
+  const codex = new MockCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), feishuGroupMemberStateRootDir: tempStateRoot("bridge-group-registration-") });
+
+  await bridge.start();
+  await channel.emitText("先帮我看一下", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+    senderDisplayName: "事件名不应直接使用",
+  });
+  await bridge.waitForIdle();
+  assert.equal(codex.runs.length, 0);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("@Bot /name 小黄")));
+
+  await channel.emitText("/name 小黄", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+    senderDisplayName: "事件名不应直接使用",
+  });
+  await channel.emitText("/whoami", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+  });
+  await channel.emitText("继续处理", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+  });
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("已记录你在当前群的展示名：小黄")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("成员登记: 已完成")));
+  assert.equal(codex.runs.at(-1)?.prompt, "小黄说：继续处理");
+});
+
+test("Bridge shows Feishu group-only member commands in group help", async () => {
+  const channel = new MockChannelAdapter({ id: "feishu", accountId: "work" });
+  const codex = new MockCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), feishuGroupMemberStateRootDir: tempStateRoot("bridge-group-help-") });
+
+  await bridge.start();
+  await channel.emitText("/help", {
+    conversationKind: "group",
+    conversationId: "oc_group",
+    senderId: "ou_xh",
+  });
+  await channel.emitText("/help", {
+    conversationKind: "direct",
+    conversationId: "oc_direct",
+    senderId: "ou_xh",
+  });
+  await bridge.stop();
+
+  const groupHelp = channel.sentMessages[0]?.text ?? "";
+  const directHelp = channel.sentMessages[1]?.text ?? "";
+  assert.ok(groupHelp.includes("- `/name <名称>`"));
+  assert.ok(groupHelp.includes("- `/name`: 查看你在当前飞书群里的展示名登记状态。"));
+  assert.ok(groupHelp.includes("- `/whoami`: 查看当前飞书群员身份、登记状态和群配对状态。"));
+  assert.equal(directHelp.includes("/name <名称>"), false);
+  assert.equal(directHelp.includes("当前飞书群员身份"), false);
 });
 
 test("Bridge batches consecutive route steers in order", async () => {
@@ -2404,6 +2495,10 @@ function mockFileAttachment(localPath: string, mimeType = "application/pdf"): Ch
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function tempStateRoot(prefix: string): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 1000): Promise<void> {

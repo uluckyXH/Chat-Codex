@@ -89,7 +89,7 @@
   飞书适配设计。说明第一阶段如何用飞书 WebSocket 长连接接入私聊文本消息，并默认投递 Codex 进度。
 
 - `feishu-user-name-cache-design.zh-CN.md`
-  飞书用户名称解析与缓存设计。说明旧绑定或事件缺少姓名字段时，如何按事件字段、本地缓存、历史 route 和飞书用户信息接口补齐 `sender.displayName`，并统一运行日志、TUI 列表和群聊发言人前缀的兜底格式。
+  飞书名称展示与群聊名册设计。说明私聊不解析名称、群聊如何按 `chat_id + open_id` 维护手工成员名册，并统一运行日志、TUI 列表和群聊发言人前缀的兜底格式。
 
 - `feishu-group-chat-design.zh-CN.md`
   飞书群聊接入与权限设计。说明群聊 route、@bot 触发、一次配对、超级管理员/管理员/小黑屋、审批权限、状态持久化和分阶段实施边界。
@@ -165,7 +165,7 @@ secrets/feishu.local.md
 18. 做 Windows 下 Codex CLI 解析、Codex 子进程启动或传给 Codex 的本地路径适配时读 `windows-compatibility.zh-CN.md`。
 19. 做 Bridge 核心拆分时读 `bridge-modularization-design.zh-CN.md`，确认备份旧文件、模块边界、分阶段迁移和行为不变验收标准。
 20. 做 app-server adapter 或 serve 入口拆分时读 `large-core-file-modularization-design.zh-CN.md`，确认原文件改名备份、薄入口、新模块边界和逐模块测试要求。
-21. 做飞书运行日志、聊天绑定列表或群聊发言人前缀时读 `feishu-user-name-cache-design.zh-CN.md`，确认名称解析、旧 route 兼容和兜底格式。
+21. 做飞书运行日志、聊天绑定列表或群聊发言人前缀时读 `feishu-user-name-cache-design.zh-CN.md`，确认私聊 open_id 兜底、群聊手工名册和展示格式。
 22. 读 `cli-interaction-redesign.zh-CN.md`，了解上一轮普通 CLI 重构背景和历史设计。
 23. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
 24. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。

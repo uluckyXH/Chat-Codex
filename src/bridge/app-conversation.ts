@@ -11,27 +11,39 @@ export function extractNewAppChatPrompt(rawText: string): string {
 }
 
 export function formatAppConversationTitle(message: ChannelMessage, target: ChannelTarget): string {
+  const feishuDirect = isFeishuChannelId(message.channelId) && message.conversation.kind === "direct";
   const title = [
     channelLabel(message.channelId),
     firstNonEmpty(message.accountId, target.accountId, "default"),
-    firstNonEmpty(
-      message.conversation.displayName,
-      target.conversation.displayName,
-      message.sender.displayName,
-      target.recipient.displayName,
-      message.conversation.id,
-      target.conversation.id,
-      message.sender.id,
-      "direct",
-    ),
+    feishuDirect
+      ? firstNonEmpty(
+        message.conversation.id,
+        target.conversation.id,
+        message.sender.id,
+        "direct",
+      )
+      : firstNonEmpty(
+        message.conversation.displayName,
+        target.conversation.displayName,
+        message.sender.displayName,
+        target.recipient.displayName,
+        message.conversation.id,
+        target.conversation.id,
+        message.sender.id,
+        "direct",
+      ),
   ].map(cleanTitlePart).filter(Boolean).join(" / ");
   return truncateTitle(title || `${channelLabel(message.channelId)} / default / direct`);
 }
 
 function channelLabel(channelId: string): string {
   if (channelId === "weixin" || channelId.startsWith("weixin-")) return "微信";
-  if (channelId === "feishu" || channelId.startsWith("feishu-") || channelId === "lark" || channelId.startsWith("lark-")) return "飞书";
+  if (isFeishuChannelId(channelId)) return "飞书";
   return channelId;
+}
+
+function isFeishuChannelId(channelId: string): boolean {
+  return channelId === "feishu" || channelId.startsWith("feishu-") || channelId === "lark" || channelId.startsWith("lark-");
 }
 
 function firstNonEmpty(...values: Array<string | undefined>): string {

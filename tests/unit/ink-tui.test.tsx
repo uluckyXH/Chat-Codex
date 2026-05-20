@@ -52,7 +52,7 @@ test("Ink TUI renders dashboard and navigates to core pages", async () => {
   view.stdin.write("b");
   await waitForInk();
   assert.match(cleanFrame(view), /聊天绑定/);
-  assert.match(cleanFrame(view), /飞书 \/ default \/ 张三/);
+  assert.match(cleanFrame(view), /飞书 \/ default \/ oc_abc/);
   assert.match(cleanFrame(view), /微信 \/ wx-main \/ 主聊天/);
   assert.match(cleanFrame(view), /待生效/);
 
@@ -674,7 +674,7 @@ test("Ink TUI manages route pairing trust and blocks untrusted binding actions",
   view.stdin.write("t");
   await waitForInk();
   assert.match(cleanFrame(view), /配对管理/);
-  assert.match(cleanFrame(view), /飞书 \/ default \/ 李四/);
+  assert.match(cleanFrame(view), /飞书 \/ default \/ oc_pending/);
 
   view.stdin.write("m");
   await waitForInk();
@@ -940,7 +940,7 @@ function dashboardFixture(): LauncherDashboard {
         createdAt: "2026-05-16T00:00:00.000Z",
         updatedAt: "2026-05-16T00:00:00.000Z",
       },
-      label: "飞书 / default / 张三",
+      label: "飞书 / default / oc_abc",
       trusted: true,
     }, {
       route: {
@@ -957,7 +957,7 @@ function dashboardFixture(): LauncherDashboard {
         createdAt: "2026-05-17T00:00:00.000Z",
         updatedAt: "2026-05-17T00:00:00.000Z",
       },
-      label: "飞书 / default / 李四",
+      label: "飞书 / default / oc_pending",
       trusted: false,
     }],
     pendingBindings: [{

@@ -469,7 +469,13 @@ export function PairingDetailView({ pairing, selected }: { pairing?: PairingRout
         <Section title="信任记录">
           <KeyValue label="信任时间" value={formatFullDateTime(trusted.trustedAt)} />
           <KeyValue label="信任方式" value={trusted.trustMethod === "manual" ? "本机手动信任" : "配对码"} />
-          <KeyValue label="信任人" value={[trusted.trustedBySenderId, trusted.trustedBySenderDisplayName].filter(Boolean).join(" / ")} />
+          <KeyValue
+            label="信任人"
+            value={[
+              trusted.trustedBySenderId,
+              feishuDirectRoute(pairing.route) ? undefined : trusted.trustedBySenderDisplayName,
+            ].filter(Boolean).join(" / ")}
+          />
         </Section>
       ) : (
         <Section title="说明">
@@ -704,4 +710,13 @@ function splitSummaryItem(item: string): [string, string | undefined] {
 function pairingRouteRight(route: PairingRouteSummary): string {
   if (route.trustedRecord) return `配对 ${formatShortDateTime(route.trustedRecord.trustedAt)}`;
   return `最近 ${formatShortDateTime(route.route.lastSeenAt ?? route.route.updatedAt)}`;
+}
+
+function feishuDirectRoute(route: PairingRouteSummary["route"]): boolean {
+  return route.conversationKind === "direct"
+    && (route.channelType === "feishu"
+      || route.channelId === "feishu"
+      || route.channelId.startsWith("feishu-")
+      || route.channelId === "lark"
+      || route.channelId.startsWith("lark-"));
 }

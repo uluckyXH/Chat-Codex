@@ -34,6 +34,7 @@ export interface BridgeOptions {
   pairingCodeManager?: PairingCodeManager;
   contextRefresh?: BridgeContextRefreshOptions;
   channelCapabilities?: BridgeChannelCapabilityController;
+  feishuGroupMemberStateRootDir?: string;
 }
 
 export interface BridgeContextRefreshOptions {

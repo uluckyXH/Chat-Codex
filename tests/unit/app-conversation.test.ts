@@ -36,7 +36,7 @@ test("app conversation helpers format readable channel titles", () => {
   }), target({
     channelId: "feishu",
     accountId: "bot-a",
-  })), "飞书 / bot-a / 张三");
+  })), "飞书 / bot-a / oc_123");
 
   const longTitle = formatAppConversationTitle(message({
     channelId: "mock",

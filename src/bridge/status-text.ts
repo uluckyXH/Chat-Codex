@@ -256,11 +256,27 @@ export class BridgeStatusText {
             description: "开启或关闭当前飞书机器人实例的群聊接收；每个群仍需单独配对。",
           }]
         : []),
+      ...(isFeishuGroupMessage(message)
+        ? [
+            {
+              command: "/name <名称>",
+              description: "登记你在当前飞书群里的展示名；普通群聊消息需要先登记。",
+            },
+            {
+              command: "/name",
+              description: "查看你在当前飞书群里的展示名登记状态。",
+            },
+            {
+              command: "/whoami",
+              description: "查看当前飞书群员身份、登记状态和群配对状态。",
+            },
+          ]
+        : []),
       { command: "/sessions", description: "列出当前聊天上下文拥有、绑定过或本地记录相关的 Codex 会话。" },
       { command: "/sessions all", description: "列出本机全部可发现的 Codex 历史会话。" },
       { command: "/resume [session|编号]", description: "恢复并绑定已有会话；不带参数时进入编号选择。" },
       { command: "/use [session|编号]", description: "切换到已有会话；不带参数时进入编号选择。" },
-      { command: "/whoami", description: "查看当前通道身份。" },
+      ...(isFeishuGroupMessage(message) ? [] : [{ command: "/whoami", description: "查看当前通道身份。" }]),
       { command: "/debug", description: "查看调试状态。" },
       { command: "/plan [任务]", description: "进入计划模式，或用计划模式处理任务。" },
       { command: "/code [任务]", description: "切回默认执行模式，或用默认模式处理任务。" },
@@ -393,6 +409,14 @@ export class BridgeStatusText {
 
 function isFeishuDirectMessage(message: ChannelMessage | undefined): boolean {
   if (!message || message.conversation.kind !== "direct") return false;
+  return message.channelId === "feishu"
+    || message.channelId.startsWith("feishu-")
+    || message.channelId === "lark"
+    || message.channelId.startsWith("lark-");
+}
+
+function isFeishuGroupMessage(message: ChannelMessage | undefined): boolean {
+  if (!message || message.conversation.kind !== "group") return false;
   return message.channelId === "feishu"
     || message.channelId.startsWith("feishu-")
     || message.channelId === "lark"

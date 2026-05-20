@@ -22,7 +22,7 @@ export class FakeFeishuClient implements FeishuSdkClient {
   readonly messageResourceGetPayloads: Array<Parameters<FeishuSdkClient["im"]["messageResource"]["get"]>[0]> = [];
   readonly reactionCreatePayloads: Array<Parameters<FeishuSdkClient["im"]["messageReaction"]["create"]>[0]> = [];
   readonly reactionDeletePayloads: Array<Parameters<FeishuSdkClient["im"]["messageReaction"]["delete"]>[0]> = [];
-  readonly userGetPayloads: Array<Parameters<NonNullable<NonNullable<FeishuSdkClient["contact"]>["user"]>["get"]>[0]> = [];
+  readonly userGetPayloads: unknown[] = [];
   probeResponse: FeishuApiResponse<{ pingBotInfo?: { botID?: string; botName?: string } }> = {
     code: 0,
     data: {
@@ -61,18 +61,6 @@ export class FakeFeishuClient implements FeishuSdkClient {
   messageResourceError?: Error;
   reactionCreateError?: Error;
   reactionDeleteError?: Error;
-  userGetResponse: FeishuApiResponse<{
-    user?: {
-      name?: string;
-      display_name?: string;
-      nickname?: string;
-      en_name?: string;
-    };
-  }> = {
-    code: 0,
-    data: {},
-  };
-  userGetError?: Error;
 
   im = {
     message: {
@@ -123,16 +111,6 @@ export class FakeFeishuClient implements FeishuSdkClient {
         this.reactionDeletePayloads.push(payload);
         if (this.reactionDeleteError) throw this.reactionDeleteError;
         return this.reactionDeleteResponse;
-      },
-    },
-  };
-
-  contact = {
-    user: {
-      get: async (payload: Parameters<NonNullable<NonNullable<FeishuSdkClient["contact"]>["user"]>["get"]>[0]) => {
-        this.userGetPayloads.push(payload);
-        if (this.userGetError) throw this.userGetError;
-        return this.userGetResponse;
       },
     },
   };

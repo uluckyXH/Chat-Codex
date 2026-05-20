@@ -8,7 +8,7 @@ import { ChannelConfigStore } from "../../src/state/channel-config-store.js";
 import { CHAT_CODEX_STATE_DIR_ENV, defaultBridgeStateDir, resolveChatCodexStateRoot } from "../../src/state/state-files.js";
 import type { ChannelMessage } from "../../src/protocol/channel.js";
 import type { CodexSession } from "../../src/codex/types.js";
-import type { BridgeConfigDocument, ChannelAccountCredentialsDocument, ChannelAccountDocument, ChannelInstanceDocument, PendingBindingsDocument, RoutesDocument, SessionOwnersDocument, SessionPoliciesDocument, TrustedRouteRecord, TrustedRoutesDocument } from "../../src/state/persistent-state-types.js";
+import type { BridgeConfigDocument, ChannelAccountCredentialsDocument, ChannelAccountDocument, ChannelInstanceDocument, GroupAccessDocument, PendingBindingsDocument, RoutesDocument, SessionOwnersDocument, SessionPoliciesDocument, TrustedRouteRecord, TrustedRoutesDocument } from "../../src/state/persistent-state-types.js";
 import { pendingBindingOwnerRouteKey } from "../../src/state/memory-state-store.js";
 
 test("default state root uses fixed user directory", () => {
@@ -159,6 +159,47 @@ test("FileStateStore persists trusted routes and refreshes last seen metadata", 
   assert.equal(new FileStateStore({ rootDir }).isRouteTrusted(routeKey), false);
 });
 
+test("FileStateStore persists group access records", () => {
+  const rootDir = tempStateDir();
+  const routeKey = "feishu-main:default:group:oc_group";
+  const store = new FileStateStore({ rootDir });
+
+  store.upsertGroupAccess({
+    routeKey,
+    channelId: "feishu-main",
+    accountId: "default",
+    conversationKind: "group",
+    conversationId: "oc_group",
+    superAdmin: {
+      senderId: "ou_admin",
+      displayName: "管理员",
+      source: "pairing",
+      createdAt: "2026-05-21T00:00:00.000Z",
+    },
+    blockedSenders: [],
+    knownPrincipals: [{
+      senderId: "ou_admin",
+      displayName: "管理员",
+      firstSeenAt: "2026-05-21T00:00:00.000Z",
+      lastSeenAt: "2026-05-21T00:00:00.000Z",
+      source: "pairing",
+    }],
+    normalMessagePolicy: "mentioned_non_blocked",
+    approvalPolicy: "super_admin_only",
+    managementPolicy: "super_admin_only",
+    blockedUserBehavior: "silent",
+    createdAt: "2026-05-21T00:00:00.000Z",
+    updatedAt: "2026-05-21T00:00:00.000Z",
+  });
+
+  const reloaded = new FileStateStore({ rootDir });
+  assert.equal(reloaded.getGroupAccess(routeKey)?.superAdmin?.senderId, "ou_admin");
+  assert.equal(reloaded.listGroupAccess()[0]?.approvalPolicy, "super_admin_only");
+
+  const doc = readJson<GroupAccessDocument>(path.join(rootDir, "group-access.json"));
+  assert.equal(doc.groups[0]?.routeKey, routeKey);
+});
+
 test("FileStateStore exposes cloned route records for route history enrichment", () => {
   const rootDir = tempStateDir();
   const routeKey = "feishu-main:default:direct:oc_user";
@@ -295,9 +336,14 @@ test("FileStateStore removes channel routes and releases active and pending owne
   const rootDir = tempStateDir();
   const store = new FileStateStore({ rootDir });
   const feishuRoute = "feishu-main:default:direct:oc_user";
+  const feishuGroupRoute = "feishu-main:default:group:oc_group";
   const weixinRoute = "weixin-main:wx:direct:wx_user";
 
   store.recordRouteMessage(feishuMessage(feishuRoute));
+  store.recordRouteMessage({
+    ...feishuMessage(feishuGroupRoute),
+    conversation: { id: "oc_group", kind: "group", displayName: "飞书群聊" },
+  });
   store.bindSession(feishuRoute, codexSession("session_feishu"));
   store.recordRouteMessage({
     ...feishuMessage(weixinRoute),
@@ -308,6 +354,25 @@ test("FileStateStore removes channel routes and releases active and pending owne
     conversation: { id: "wx_user", kind: "direct", displayName: "微信私聊" },
   });
   store.trustRoute(trustedRoute(feishuRoute));
+  store.upsertGroupAccess({
+    routeKey: feishuGroupRoute,
+    channelId: "feishu-main",
+    accountId: "default",
+    conversationKind: "group",
+    conversationId: "oc_group",
+    superAdmin: {
+      senderId: "ou_admin",
+      source: "pairing",
+      createdAt: "2026-05-21T00:00:00.000Z",
+    },
+    blockedSenders: [],
+    normalMessagePolicy: "mentioned_non_blocked",
+    approvalPolicy: "super_admin_only",
+    managementPolicy: "super_admin_only",
+    blockedUserBehavior: "silent",
+    createdAt: "2026-05-21T00:00:00.000Z",
+    updatedAt: "2026-05-21T00:00:00.000Z",
+  });
   store.trustRoute(trustedRoute(weixinRoute, {
     channelId: "weixin-main",
     accountId: "wx",
@@ -336,7 +401,7 @@ test("FileStateStore removes channel routes and releases active and pending owne
 
   assert.deepEqual(removed, {
     channelId: "feishu-main",
-    removedRoutes: 1,
+    removedRoutes: 2,
     releasedSessions: 2,
     removedPendingBindings: 1,
   });
@@ -344,6 +409,7 @@ test("FileStateStore removes channel routes and releases active and pending owne
   assert.equal(store.listRoutes().some((route) => route.channelId === "weixin-main"), true);
   assert.equal(store.isRouteTrusted(feishuRoute), false);
   assert.equal(store.isRouteTrusted(weixinRoute), true);
+  assert.equal(store.getGroupAccess(feishuGroupRoute), undefined);
   assert.equal(store.getSessionOwner("session_feishu"), undefined);
   assert.equal(store.getSessionOwner("session_pending_feishu"), undefined);
   assert.equal(store.getSessionOwner("session_pending_weixin")?.ownerRouteKey, pendingBindingOwnerRouteKey("weixin-primary-weixin-main-wx"));
@@ -351,6 +417,7 @@ test("FileStateStore removes channel routes and releases active and pending owne
   const reloaded = new FileStateStore({ rootDir });
   assert.equal(reloaded.listRoutes().some((route) => route.channelId === "feishu-main"), false);
   assert.equal(reloaded.getSessionOwner("session_feishu"), undefined);
+  assert.equal(reloaded.getGroupAccess(feishuGroupRoute), undefined);
   assert.equal(reloaded.listPendingBindings().map((pending) => pending.id).join(","), "weixin-primary-weixin-main-wx");
   assert.deepEqual(reloaded.listTrustedRoutes().map((route) => route.routeKey), [weixinRoute]);
 });

@@ -132,6 +132,68 @@ export interface TrustedRoutesDocument {
   trustedRoutes: TrustedRouteRecord[];
 }
 
+export type GroupPrincipalSource = "pairing" | "command" | "tui";
+
+export interface GroupPrincipal {
+  senderId: string;
+  displayName?: string;
+  source: GroupPrincipalSource;
+  createdBySenderId?: string;
+  createdAt: string;
+}
+
+export interface KnownGroupPrincipal {
+  senderId: string;
+  displayName?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  source: "message" | "pairing" | "tui";
+}
+
+export interface GroupRoleRecord {
+  roleId: string;
+  label: string;
+  members: GroupPrincipal[];
+  capabilities: {
+    canApprove?: boolean;
+    canBlock?: boolean;
+    canManageAdmins?: boolean;
+    canViewAudit?: boolean;
+  };
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type GroupNormalMessagePolicy = "mentioned_non_blocked";
+export type GroupApprovalPolicy = "super_admin_only" | "any_non_blocked";
+export type GroupManagementPolicy = "super_admin_only";
+export type GroupBlockedUserBehavior = "silent";
+
+export interface GroupAccessRecord {
+  routeKey: string;
+  channelId: string;
+  accountId: string;
+  conversationKind: "group";
+  conversationId: string;
+  superAdmin?: GroupPrincipal;
+  blockedSenders: GroupPrincipal[];
+  knownPrincipals?: KnownGroupPrincipal[];
+  normalMessagePolicy: GroupNormalMessagePolicy;
+  approvalPolicy: GroupApprovalPolicy;
+  managementPolicy: GroupManagementPolicy;
+  blockedUserBehavior: GroupBlockedUserBehavior;
+  reservedRoles?: GroupRoleRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GroupAccessDocument {
+  schemaVersion: number;
+  updatedAt: string;
+  groups: GroupAccessRecord[];
+}
+
 export interface ChannelInstanceRecord {
   id: string;
   type: string;

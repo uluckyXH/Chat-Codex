@@ -48,7 +48,7 @@ test("feishuEventToChannelMessage maps p2p text to ChannelMessage", () => {
   });
 });
 
-test("feishuEventToChannelMessage preserves Feishu sender display name when present", () => {
+test("feishuEventToChannelMessage ignores direct sender names and preserves group sender names", () => {
   const now = Date.now();
   const direct = feishuEventToChannelMessage(sampleFeishuTextEvent({
     sender: { sender_name: "小黄" },
@@ -87,7 +87,7 @@ test("feishuEventToChannelMessage preserves Feishu sender display name when pres
   assert.equal(direct.ok, true);
   assert.equal(group.ok, true);
   if (!direct.ok || !group.ok) return;
-  assert.deepEqual(direct.message.sender, { id: "ou_user", displayName: "小黄" });
+  assert.deepEqual(direct.message.sender, { id: "ou_user" });
   assert.deepEqual(group.message.sender, { id: "ou_user", displayName: "张三" });
 });
 

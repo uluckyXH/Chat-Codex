@@ -20,11 +20,13 @@ export interface RouteTrustGateOptions {
   mode?: RouteTrustMode;
   pairingCodes?: PairingCodeManager;
   now?: () => Date;
+  onRouteTrusted?: (record: TrustedRouteRecord, message: ChannelMessage) => void | Promise<void>;
 }
 
 export type RouteTrustGateResult =
   | { action: "allow" }
-  | { action: "handled"; reason: "challenge_created" | "paired" | "pair_failed" };
+  | { action: "handled"; reason: "challenge_created" | "pair_failed" }
+  | { action: "handled"; reason: "paired"; trustedRoute: TrustedRouteRecord };
 
 export class RouteTrustGate {
   private readonly state: MemoryStateStore;
@@ -34,6 +36,7 @@ export class RouteTrustGate {
   private readonly mode: RouteTrustMode;
   private readonly pairingCodes: PairingCodeManager;
   private readonly now: () => Date;
+  private readonly onRouteTrusted?: (record: TrustedRouteRecord, message: ChannelMessage) => void | Promise<void>;
 
   constructor(options: RouteTrustGateOptions) {
     this.state = options.state;
@@ -43,6 +46,7 @@ export class RouteTrustGate {
     this.mode = options.mode ?? "disabled";
     this.pairingCodes = options.pairingCodes ?? new PairingCodeManager();
     this.now = options.now ?? (() => new Date());
+    this.onRouteTrusted = options.onRouteTrusted;
   }
 
   async handle(message: ChannelMessage, target: ChannelTarget): Promise<RouteTrustGateResult> {
@@ -54,6 +58,7 @@ export class RouteTrustGate {
       const verified = this.pairingCodes.verify(message.routeKey, inputCode);
       if (verified.ok) {
         const trusted = this.state.trustRoute(trustedRouteFromMessage(message, this.now()));
+        await this.onRouteTrusted?.(trusted, message);
         this.logSecurity(target, pairedText(trusted));
         this.logger.info("route pairing completed", {
           routeKey: message.routeKey,
@@ -61,7 +66,7 @@ export class RouteTrustGate {
           conversationKind: message.conversation.kind,
         });
         await this.delivery.sendText(target, "Chat-Codex 配对成功，当前聊天已信任。");
-        return { action: "handled", reason: "paired" };
+        return { action: "handled", reason: "paired", trustedRoute: trusted };
       }
       this.logSecurity(target, pairingFailedText(message, verified.reason));
       this.logger.warn("route pairing failed", {
@@ -114,16 +119,17 @@ export class RouteTrustGate {
 
 export function trustedRouteFromMessage(message: ChannelMessage, now: Date): TrustedRouteRecord {
   const timestamp = now.toISOString();
+  const feishuDirect = isFeishuDirectMessage(message);
   return {
     routeKey: message.routeKey,
     channelId: message.channelId,
     accountId: message.accountId ?? "default",
     conversationKind: message.conversation.kind,
     conversationId: message.conversation.id,
-    displayName: message.conversation.displayName ?? message.sender.displayName,
+    displayName: message.conversation.displayName ?? (feishuDirect ? undefined : message.sender.displayName),
     trustedAt: timestamp,
     trustedBySenderId: message.sender.id,
-    trustedBySenderDisplayName: message.sender.displayName,
+    trustedBySenderDisplayName: feishuDirect ? undefined : message.sender.displayName,
     trustMethod: "pairing_code",
     lastSeenAt: message.timestamp,
     createdAt: timestamp,
@@ -138,6 +144,14 @@ export function isRealChannelId(channelId: string): boolean {
     || channelId.startsWith("feishu-")
     || channelId === "lark"
     || channelId.startsWith("lark-");
+}
+
+function isFeishuDirectMessage(message: ChannelMessage): boolean {
+  return message.conversation.kind === "direct"
+    && (message.channelId === "feishu"
+      || message.channelId.startsWith("feishu-")
+      || message.channelId === "lark"
+      || message.channelId.startsWith("lark-"));
 }
 
 function pairedText(record: TrustedRouteRecord): string {

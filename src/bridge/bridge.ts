@@ -1,11 +1,14 @@
 import { ApprovalManager } from "../approvals/approval-manager.js";
+import type { ApprovalDecision } from "../approvals/types.js";
 import type { CodexRunPolicyStatus } from "../codex/codex-cli.js";
 import type { CodexAdapter, CodexCollaborationMode, CodexProgressKind, CodexPromptInput } from "../codex/types.js";
 import { parseCommand } from "../commands/parser.js";
+import { GroupAccessService } from "../group-access/service.js";
 import type { Logger } from "../logging/logger.js";
 import { SilentLogger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import { ChannelRegistry, createSingleChannelRegistry } from "../channels/registry.js";
+import { FeishuGroupMemberRegistry } from "../channels/feishu/group/group-member-registry.js";
 import type { ChannelAdapter, ChannelMessage, ChannelTarget } from "../protocol/channel.js";
 import { replyTargetFromMessage } from "../protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../protocol/delivery-policy.js";
@@ -41,6 +44,15 @@ import { handleCollaborationModeCommand } from "./commands/collaboration-command
 import { handleCompactCommand } from "./commands/compact-command.js";
 import { handleContextRefreshCommand } from "./commands/context-refresh-command.js";
 import { handleGoalCommand } from "./commands/goal-command.js";
+import {
+  feishuGroupMemberRefFromMessage,
+  feishuGroupRegistrationRequiredText,
+  formatFeishuGroupWhoami,
+  handleGroupNameCommand,
+  isFeishuGroupMessage,
+  isFeishuGroupPreTrustCommand,
+  isFeishuGroupRegistrationFreeCommand,
+} from "./commands/group-name-command.js";
 import { handleGroupReceiveCommand } from "./commands/group-receive-command.js";
 import { handleModelCommand } from "./commands/model-command.js";
 import { handleNewSessionCommand } from "./commands/new-command.js";
@@ -88,6 +100,8 @@ export class Bridge {
   private readonly sessionFlow: BridgeSessionFlow;
   private readonly statusTextRenderer: BridgeStatusText;
   private readonly commandRouter: BridgeCommandRouter;
+  private readonly feishuGroupMembers: FeishuGroupMemberRegistry;
+  private readonly groupAccess: GroupAccessService;
   private readonly cwd: string;
   private readonly defaultProgressMode: ProgressDeliveryMode;
   private readonly routeProgressModes = new Map<string, ProgressDeliveryMode>();
@@ -113,6 +127,11 @@ export class Bridge {
     this.turnScheduler = options.turnScheduler ?? new UnlimitedTurnScheduler();
     this.transcript = options.transcript;
     this.cwd = options.cwd ?? process.cwd();
+    this.feishuGroupMembers = new FeishuGroupMemberRegistry({
+      stateRootDir: options.feishuGroupMemberStateRootDir,
+      cwd: this.cwd,
+    });
+    this.groupAccess = new GroupAccessService({ state: this.state });
     this.delivery = new BridgeDelivery({
       channels: this.channels,
       approvals: this.approvals,
@@ -127,6 +146,9 @@ export class Bridge {
       transcript: this.transcript,
       mode: options.routeTrustMode,
       pairingCodes: options.pairingCodeManager,
+      onRouteTrusted: (record) => {
+        this.groupAccess.ensureForTrustedRoute(record);
+      },
     });
     this.contextRefresh = new SessionContextRefreshManager({
       state: this.state,
@@ -236,7 +258,9 @@ export class Bridge {
           delivery: this.delivery,
           cancelCompactConfirmation: (routeKey) => this.cancelCompactConfirmation(routeKey),
         }, message, target),
-        whoami: (message) => this.statusTextRenderer.whoamiText(message),
+        whoami: (message) => isFeishuGroupMessage(message)
+          ? formatFeishuGroupWhoami(message, this.feishuGroupMembers, this.state)
+          : this.statusTextRenderer.whoamiText(message),
         debug: (message) => this.statusTextRenderer.debugText(message),
         collaborationMode: (message, target, mode, rawText, commandName) => handleCollaborationModeCommand({
           codex: this.codex,
@@ -265,6 +289,11 @@ export class Bridge {
           delivery: this.delivery,
           channelCapabilities: options.channelCapabilities,
         }, message, target, args, commandName),
+        groupName: (message, target, args) => handleGroupNameCommand({
+          state: this.state,
+          delivery: this.delivery,
+          registry: this.feishuGroupMembers,
+        }, message, target, args),
         sendFile: (message, target, rawText) => handleSendFileCommand({
           delivery: this.delivery,
           routeQueue: this.routeQueue,
@@ -284,11 +313,7 @@ export class Bridge {
           statusText: this.statusTextRenderer,
           runPolicyStatus: (sessionId) => this.runPolicyStatus(sessionId),
         }, message, target, args),
-        approval: (message, target, args, decision) => handleApprovalCommand({
-          approvals: this.approvals,
-          codex: this.codex,
-          delivery: this.delivery,
-        }, message, target, args, decision),
+        approval: (message, target, args, decision) => this.handleApprovalCommand(message, target, args, decision),
         stop: (message, target) => handleStopCommand({
           state: this.state,
           codex: this.codex,
@@ -334,18 +359,35 @@ export class Bridge {
   async handleMessage(message: ChannelMessage): Promise<void> {
     message = this.enrichMessageFromRouteHistory(message);
     const text = message.text?.trim() ?? "";
+    const command = text ? parseCommand(text) : undefined;
     const attachments = classifyInboundAttachments(message.attachments);
     const hasInboundMedia = attachments.usable.length > 0 || attachments.failed.length > 0 || attachments.unsupported.length > 0;
     if (!text && !hasInboundMedia) return;
     this.transcript?.inbound(message, text || inboundAttachmentTranscriptText(attachments.usable.length));
     const target = replyTargetFromMessage(message);
+    if (command?.isCommand
+      && isFeishuGroupMessage(message)
+      && !this.state.isRouteTrusted(message.routeKey)
+      && isFeishuGroupPreTrustCommand(command.name)) {
+      await this.commandRouter.handle(message, target, command.name ?? "", command.args, text);
+      return;
+    }
     this.routeMessages.set(message.routeKey, message);
     this.routeTargets.set(message.routeKey, target);
     this.state.recordRouteMessage(message);
     const trust = await this.routeTrustGate.handle(message, target);
     if (trust.action === "handled") return;
     this.sessionFlow.claimPendingInitialRouteBindingRoute(message);
-    const command = text ? parseCommand(text) : undefined;
+    if (isFeishuGroupMessage(message) && this.state.isRouteTrusted(message.routeKey)) {
+      this.groupAccess.ensureForTrustedGroupMessage(message);
+      if (this.groupAccess.isSenderBlocked(message)) return;
+    }
+    if (isFeishuGroupMessage(message)
+      && !isFeishuGroupRegistrationFreeCommand(command?.name)
+      && !this.isFeishuGroupMemberRegistered(message)) {
+      await this.delivery.sendText(target, feishuGroupRegistrationRequiredText());
+      return;
+    }
     if (this.isCompactRunning(message.routeKey)) {
       if (command?.isCommand && isCommandAllowedDuringCompact(command.name ?? "")) {
         await this.commandRouter.handle(message, target, command.name ?? "", command.args, text);
@@ -397,6 +439,8 @@ export class Bridge {
   }
 
   private enrichMessageFromRouteHistory(message: ChannelMessage): ChannelMessage {
+    if (isFeishuDirectMessage(message)) return withoutSenderDisplayName(message);
+    if (isFeishuGroupMessage(message)) return this.withFeishuGroupMemberDisplayName(message);
     if (message.sender.displayName) return message;
     const route = this.state.getRouteRecord(message.routeKey);
     const displayName = route?.identity?.lastSenderDisplayName?.trim();
@@ -410,6 +454,45 @@ export class Bridge {
         displayName,
       },
     };
+  }
+
+  private withFeishuGroupMemberDisplayName(message: ChannelMessage): ChannelMessage {
+    const ref = feishuGroupMemberRefFromMessage(message);
+    const displayName = ref ? this.feishuGroupMembers.getMember(ref)?.displayName : undefined;
+    if (!displayName) return withoutSenderDisplayName(message);
+    return {
+      ...message,
+      sender: {
+        ...message.sender,
+        displayName,
+      },
+    };
+  }
+
+  private isFeishuGroupMemberRegistered(message: ChannelMessage): boolean {
+    const ref = feishuGroupMemberRefFromMessage(message);
+    return Boolean(ref && this.feishuGroupMembers.hasMember(ref));
+  }
+
+  private async handleApprovalCommand(
+    message: ChannelMessage,
+    target: ChannelTarget,
+    args: string[],
+    decision: ApprovalDecision,
+  ): Promise<void> {
+    if (isFeishuGroupMessage(message) && this.state.isRouteTrusted(message.routeKey)) {
+      const approval = this.groupAccess.canApprove(message);
+      if (!approval.allowed) {
+        if (approval.reason === "blocked") return;
+        await this.delivery.sendText(target, groupApprovalDeniedText(approval.reason));
+        return;
+      }
+    }
+    await handleApprovalCommand({
+      approvals: this.approvals,
+      codex: this.codex,
+      delivery: this.delivery,
+    }, message, target, args, decision);
   }
 
   async waitForIdle(): Promise<void> {
@@ -542,6 +625,26 @@ export class Bridge {
   }
 }
 
+function isFeishuDirectMessage(message: ChannelMessage): boolean {
+  return message.conversation.kind === "direct"
+    && (message.channelId === "feishu"
+      || message.channelId.startsWith("feishu-")
+      || message.channelId === "lark"
+      || message.channelId.startsWith("lark-"));
+}
+
+function withoutSenderDisplayName(message: ChannelMessage): ChannelMessage {
+  if (!message.sender.displayName) return message;
+  const { displayName: _displayName, ...sender } = message.sender;
+  return { ...message, sender };
+}
+
 function isCommandAllowedDuringCompact(name: string): boolean {
   return name === "status" || name === "help" || name === "whoami" || name === "debug";
+}
+
+function groupApprovalDeniedText(reason: string | undefined): string {
+  if (reason === "missing_super_admin") return "当前群还没有超级管理员，暂不能处理 Codex 审批。请在本机 TUI 设置超级管理员。";
+  if (reason === "missing_group_access") return "当前群权限记录还没有初始化，暂不能处理 Codex 审批。请重新完成群配对。";
+  return "当前群默认只允许超级管理员处理 Codex 审批。";
 }

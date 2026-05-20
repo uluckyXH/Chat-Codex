@@ -31,8 +31,8 @@ test("BindingActions lists selectable sessions and excludes sessions owned by an
 
   assert.deepEqual(choices.selectable.map((choice) => choice.id), ["session-free"]);
   assert.deepEqual(choices.unavailable.map((choice) => choice.id), ["session-owned"]);
-  assert.equal(choices.unavailable[0].ownerLabel, "飞书 / default / 李四");
-  assert.equal(formatOwnerRouteLabel(state, secondRoute), "飞书 / default / 李四");
+  assert.equal(choices.unavailable[0].ownerLabel, "飞书 / default / ou_second");
+  assert.equal(formatOwnerRouteLabel(state, secondRoute), "飞书 / default / ou_second");
   const text = actions.formatSessionChoices(firstRoute, choices);
   assert.match(text, /1\. 可用/);
   assert.match(text, /最近 05-16/);
@@ -75,7 +75,7 @@ test("BindingActions creates new bindings and unbinds active sessions", () => {
   assert.equal(bound.ok, true);
   assert.equal(state.getBinding(routeKey)?.sessionId, "session-new");
   assert.equal(state.getSessionOwner("session-new")?.ownerRouteKey, routeKey);
-  assert.equal(actions.getBinding(routeKey)?.label, "飞书 / default / 张三");
+  assert.equal(actions.getBinding(routeKey)?.label, "飞书 / default / ou_first");
 
   const unbound = actions.unbindSession(routeKey);
 

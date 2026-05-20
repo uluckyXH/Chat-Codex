@@ -137,7 +137,9 @@ export function feishuEventToChannelMessage(
     ?? event.sender?.sender_id?.user_id
     ?? event.sender?.sender_id?.union_id;
   if (!senderId) return { ok: false, reason: "missing_sender_id" };
-  const senderDisplayName = firstNonEmpty(event.sender.sender_name, event.sender.name, event.sender.user_name);
+  const senderDisplayName = message.chat_type === "group"
+    ? firstNonEmpty(event.sender.sender_name, event.sender.name, event.sender.user_name)
+    : undefined;
   if (options.botOpenId && senderId === options.botOpenId) {
     return { ok: false, reason: "self_echo" };
   }
@@ -171,7 +173,6 @@ export function feishuEventToChannelMessage(
     accountId: options.accountId,
     sender: {
       id: senderId,
-      ...(senderDisplayName ? { displayName: senderDisplayName } : {}),
     },
     conversation: {
       id: message.chat_id,
@@ -318,7 +319,6 @@ export function feishuStatusDetails(input: {
   botOpenId?: string;
   botName?: string;
   groupEnabled?: boolean;
-  lastUserNameError?: string;
   connectionState?: string;
   reconnectAttempts?: number;
   dedupSize?: number;
@@ -335,7 +335,6 @@ export function feishuStatusDetails(input: {
     botOpenId: input.botOpenId,
     botName: input.botName,
     groupEnabled: input.groupEnabled ?? false,
-    lastUserNameError: input.lastUserNameError,
     connectionState: input.connectionState,
     reconnectAttempts: input.reconnectAttempts,
     dedupSize: input.dedupSize,

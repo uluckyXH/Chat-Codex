@@ -5,6 +5,7 @@ import { SessionBindings, type ActivateSessionResult, type ClaimSessionResult, t
 import {
   type PendingBindingRecord,
   type PendingSessionBinding,
+  type GroupAccessRecord,
   type RouteRecord,
   type SessionContextSnapshotObservedBy,
   type SessionContextSnapshotRecord,
@@ -37,6 +38,7 @@ export class MemoryStateStore {
   private readonly sessionRunPolicies = new Map<string, CodexRunPolicy>();
   private readonly pendingBindings = new Map<string, PendingBindingRecord>();
   private readonly trustedRoutes = new Map<string, TrustedRouteRecord>();
+  private readonly groupAccess = new Map<string, GroupAccessRecord>();
   private readonly routeContextRefreshPolicies = new Map<string, ContextRefreshPolicy>();
   private readonly sessionContextSnapshots = new Map<string, SessionContextSnapshotRecord>();
 
@@ -46,6 +48,7 @@ export class MemoryStateStore {
     pendingBindings: PendingBindingRecord[] = [],
     trustedRoutes: TrustedRouteRecord[] = [],
     sessionContextSnapshots: SessionContextSnapshotRecord[] = [],
+    groupAccess: GroupAccessRecord[] = [],
   ) {
     for (const policy of sessionPolicies) {
       this.sessionRunPolicies.set(policy.sessionId, { ...policy.runPolicy });
@@ -55,6 +58,9 @@ export class MemoryStateStore {
     }
     for (const route of trustedRoutes) {
       this.trustedRoutes.set(route.routeKey, cloneTrustedRoute(route));
+    }
+    for (const record of groupAccess) {
+      this.groupAccess.set(record.routeKey, cloneGroupAccessRecord(record));
     }
     for (const snapshot of sessionContextSnapshots) {
       if (snapshot.sessionId) this.sessionContextSnapshots.set(snapshot.sessionId, cloneSessionContextSnapshot(snapshot));
@@ -87,6 +93,11 @@ export class MemoryStateStore {
     return this.trustedRoutes.has(routeKey);
   }
 
+  getTrustedRoute(routeKey: string): TrustedRouteRecord | undefined {
+    const record = this.trustedRoutes.get(routeKey);
+    return record ? cloneTrustedRoute(record) : undefined;
+  }
+
   trustRoute(record: TrustedRouteRecord): TrustedRouteRecord {
     const existing = this.trustedRoutes.get(record.routeKey);
     const now = new Date().toISOString();
@@ -109,6 +120,29 @@ export class MemoryStateStore {
   listTrustedRoutes(): TrustedRouteRecord[] {
     return [...this.trustedRoutes.values()]
       .map(cloneTrustedRoute)
+      .sort((left, right) => left.routeKey.localeCompare(right.routeKey));
+  }
+
+  getGroupAccess(routeKey: string): GroupAccessRecord | undefined {
+    const record = this.groupAccess.get(routeKey);
+    return record ? cloneGroupAccessRecord(record) : undefined;
+  }
+
+  upsertGroupAccess(record: GroupAccessRecord): GroupAccessRecord {
+    this.groupAccess.set(record.routeKey, cloneGroupAccessRecord(record));
+    return cloneGroupAccessRecord(record);
+  }
+
+  deleteGroupAccess(routeKey: string): GroupAccessRecord | undefined {
+    const existing = this.groupAccess.get(routeKey);
+    if (!existing) return undefined;
+    this.groupAccess.delete(routeKey);
+    return cloneGroupAccessRecord(existing);
+  }
+
+  listGroupAccess(): GroupAccessRecord[] {
+    return [...this.groupAccess.values()]
+      .map(cloneGroupAccessRecord)
       .sort((left, right) => left.routeKey.localeCompare(right.routeKey));
   }
 
@@ -346,6 +380,20 @@ function clonePendingBinding(record: PendingBindingRecord): PendingBindingRecord
 
 function cloneTrustedRoute(record: TrustedRouteRecord): TrustedRouteRecord {
   return { ...record };
+}
+
+function cloneGroupAccessRecord(record: GroupAccessRecord): GroupAccessRecord {
+  return {
+    ...record,
+    superAdmin: record.superAdmin ? { ...record.superAdmin } : undefined,
+    blockedSenders: record.blockedSenders.map((sender) => ({ ...sender })),
+    knownPrincipals: record.knownPrincipals?.map((principal) => ({ ...principal })),
+    reservedRoles: record.reservedRoles?.map((role) => ({
+      ...role,
+      members: role.members.map((member) => ({ ...member })),
+      capabilities: { ...role.capabilities },
+    })),
+  };
 }
 
 function cloneSessionContextSnapshot(record: SessionContextSnapshotRecord): SessionContextSnapshotRecord {

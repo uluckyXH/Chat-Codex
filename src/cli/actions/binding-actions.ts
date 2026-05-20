@@ -320,11 +320,16 @@ export function formatRouteLabel(route: RouteRecord): string {
   }
   if (route.channelType === "feishu" || route.channelId.startsWith("feishu") || route.channelId.startsWith("lark")) {
     const identity = route.identity;
-    const name = identity?.lastSenderDisplayName
-      ?? maskedIdentifier(identity?.openId)
-      ?? maskedIdentifier(route.conversationId)
-      ?? route.displayName
-      ?? "未知用户";
+    const name = route.conversationKind === "direct"
+      ? maskedIdentifier(identity?.openId)
+        ?? maskedIdentifier(route.conversationId)
+        ?? route.displayName
+        ?? "未知用户"
+      : route.displayName
+        ?? identity?.lastSenderDisplayName
+        ?? maskedIdentifier(identity?.openId)
+        ?? maskedIdentifier(route.conversationId)
+        ?? "未知群聊";
     return `飞书 / ${route.accountId} / ${name}`;
   }
   return `${route.channelType ?? route.channelId} / ${route.displayName ?? route.conversationId}`;
