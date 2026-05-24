@@ -94,6 +94,9 @@
 - `feishu-group-chat-design.zh-CN.md`
   飞书群聊接入与权限设计。说明群聊 route、@bot 触发、一次配对、超级管理员/管理员/小黑屋、审批权限、状态持久化和分阶段实施边界。
 
+- `feishu-skills-command-design.zh-CN.md`
+  `/feishu` 飞书能力引导与工具适配讨论稿。说明如何把 OpenClaw 飞书插件的 skills 同步为 Chat-Codex 可发布资源，如何通过 `/feishu <任务>` 给 Codex 注入飞书 Skill 索引，以及后续真实 `feishu_*` 工具调用如何按契约、凭证隔离和审批策略逐步适配；当前仍是待讨论状态，尚未进入实现承诺。
+
 - `requirements.md`
   早期英文需求草稿。保留作参考，不作为当前主设计依据。
 
@@ -166,11 +169,12 @@ secrets/feishu.local.md
 19. 做 Bridge 核心拆分时读 `bridge-modularization-design.zh-CN.md`，确认备份旧文件、模块边界、分阶段迁移和行为不变验收标准。
 20. 做 app-server adapter 或 serve 入口拆分时读 `large-core-file-modularization-design.zh-CN.md`，确认原文件改名备份、薄入口、新模块边界和逐模块测试要求。
 21. 做飞书运行日志、聊天绑定列表或群聊发言人前缀时读 `feishu-user-name-cache-design.zh-CN.md`，确认私聊 open_id 兜底、群聊手工名册和展示格式。
-22. 读 `cli-interaction-redesign.zh-CN.md`，了解上一轮普通 CLI 重构背景和历史设计。
-23. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
-24. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
-25. Agent 继续读 `agent-guide.zh-CN.md`，确认执行规范。
-26. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
+22. 做 `/feishu` 飞书 skills 引导、skills 同步或后续真实飞书工具调用适配时读 `feishu-skills-command-design.zh-CN.md`。
+23. 读 `cli-interaction-redesign.zh-CN.md`，了解上一轮普通 CLI 重构背景和历史设计。
+24. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
+25. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
+26. Agent 继续读 `agent-guide.zh-CN.md`，确认执行规范。
+27. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
 
 ## 分阶段工作顺序
 
