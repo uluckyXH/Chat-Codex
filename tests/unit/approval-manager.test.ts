@@ -100,3 +100,29 @@ test("ApprovalManager cancels pending approvals for a route", () => {
   assert.equal(manager.list("route-a").length, 0);
   assert.equal(manager.list("route-b").length, 1);
 });
+
+test("ApprovalManager resolves pending approvals by adapter request id", () => {
+  const manager = new ApprovalManager({ ttlMs: 60_000 });
+  const pending = manager.create("route-a", "user", {
+    kind: "command",
+    adapterApprovalId: "server-request-1",
+    sessionId: "s1",
+    turnId: "t1",
+    itemId: "i1",
+  });
+  manager.create("route-b", "user", {
+    kind: "command",
+    adapterApprovalId: "server-request-1",
+    sessionId: "s2",
+    turnId: "t2",
+    itemId: "i2",
+  });
+
+  const resolved = manager.resolveAdapterApproval("route-a", "server-request-1", "already resolved by app-server");
+
+  assert.equal(resolved?.approvalKey, pending.approvalKey);
+  assert.equal(resolved?.status, "resolved");
+  assert.equal(resolved?.decisionReason, "already resolved by app-server");
+  assert.equal(manager.list("route-a").length, 0);
+  assert.equal(manager.list("route-b").length, 1);
+});

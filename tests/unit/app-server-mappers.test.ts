@@ -1,11 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { approvalFromServerRequest, approvalKindForMethod, responseForApprovalDecision, riskyCommand } from "../../src/codex/app-server/approval-handler.js";
 import { goalFromResponse, goalFromSetResponse } from "../../src/codex/app-server/goal-api.js";
 import { appServerUserInput, localFileInputText } from "../../src/codex/app-server/input-mapper.js";
 import { modelInfoFromResponse, modelInfoWithPolicy, modelsFromListResponse, parseTokenUsage, withoutModelInfo } from "../../src/codex/app-server/model-policy.js";
 import { appServerErrorMessage, isTransientAppServerError, messagePhaseValue, progressFromThreadItem, shouldFlushProgressDraft, textFromPlan } from "../../src/codex/app-server/notification-mapper.js";
+import { APP_SERVER_PROTOCOL_CAPABILITIES, type AppServerProtocolDirection } from "../../src/codex/app-server/protocol-capabilities.js";
 import { approvalPolicyForRunPolicy, approvalsReviewerForRunPolicy, cloneRunPolicy, sandboxModeForRunPolicy, sandboxPolicyForRunPolicy } from "../../src/codex/app-server/run-policy.js";
+import { contextFromServerRequestParams, unsupportedServerRequestResponse } from "../../src/codex/app-server/server-request-mapper.js";
 import { collaborationModePayload, truncatePrompt, withContext, withModelPolicy } from "../../src/codex/app-server/session-status.js";
 import { AsyncEventQueue, createTurnQueueRecord, shouldCreateBackgroundTurn } from "../../src/codex/app-server/turn-store.js";
 import { arrayValue, isoFromSeconds, numberValue, objectValue, objectValueOrNull, stringValue } from "../../src/codex/app-server/value-parsers.js";
@@ -85,6 +89,66 @@ test("app-server approval mapper preserves request and decision compatibility", 
   assert.equal(approvalFromServerRequest("unknown", "approval-1", {}), undefined);
   assert.equal(riskyCommand("sudo rm -rf /tmp/x"), true);
   assert.equal(riskyCommand("npm test"), false);
+});
+
+test("app-server unsupported server request mapper fails closed with visible notices", () => {
+  assert.deepEqual(contextFromServerRequestParams({
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+  }), {
+    sessionId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+  });
+
+  const input = unsupportedServerRequestResponse("item/tool/requestUserInput", {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    questions: [{ id: "q1", header: "确认路径", question: "是否继续？" }],
+  });
+  assert.equal(input.error?.code, -32000);
+  assert.match(input.notice?.text ?? "", /额外用户输入/);
+
+  const elicitation = unsupportedServerRequestResponse("mcpServer/elicitation/request", {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    serverName: "private-app",
+    mode: "url",
+    message: "需要授权",
+  });
+  assert.deepEqual(elicitation.result, { action: "cancel", content: null, _meta: null });
+  assert.match(elicitation.notice?.text ?? "", /MCP elicitation/);
+
+  const toolCall = unsupportedServerRequestResponse("item/tool/call", {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    namespace: "bridge",
+    tool: "dangerous",
+  });
+  assert.deepEqual(toolCall.result, {
+    success: false,
+    contentItems: [{ type: "inputText", text: "Codex 请求调用动态工具 bridge.dangerous，但 Chat-Codex 当前没有开放动态工具桥接；本次调用已拒绝。" }],
+  });
+
+  const auth = unsupportedServerRequestResponse("account/chatgptAuthTokens/refresh", {});
+  assert.equal(auth.error?.code, -32000);
+  assert.match(auth.error?.message ?? "", /不接管/);
+});
+
+test("app-server protocol inventory classifies local Codex reference schema methods", { skip: !hasReferenceSchema() }, () => {
+  const schemaDir = path.join(process.cwd(), "references/openai-codex/codex-rs/app-server-protocol/schema/typescript");
+  const expected = {
+    client_request: methodsFromGeneratedSchema(path.join(schemaDir, "ClientRequest.ts")),
+    server_request: methodsFromGeneratedSchema(path.join(schemaDir, "ServerRequest.ts")),
+    server_notification: methodsFromGeneratedSchema(path.join(schemaDir, "ServerNotification.ts")),
+  } satisfies Record<AppServerProtocolDirection, string[]>;
+  const known = new Set(APP_SERVER_PROTOCOL_CAPABILITIES.map((capability) => `${capability.direction}:${capability.method}`));
+
+  for (const [direction, methods] of Object.entries(expected) as Array<[AppServerProtocolDirection, string[]]>) {
+    const missing = methods.filter((method) => !known.has(`${direction}:${method}`));
+    assert.deepEqual(missing, [], `${direction} methods must be classified`);
+  }
 });
 
 test("app-server goal mapper accepts camel and snake case responses", () => {
@@ -255,3 +319,12 @@ test("app-server session status helpers preserve status context and collaboratio
   });
   assert.equal(truncatePrompt("x".repeat(130)).length, 120);
 });
+
+function hasReferenceSchema(): boolean {
+  return existsSync(path.join(process.cwd(), "references/openai-codex/codex-rs/app-server-protocol/schema/typescript/ServerRequest.ts"));
+}
+
+function methodsFromGeneratedSchema(filePath: string): string[] {
+  const text = readFileSync(filePath, "utf8");
+  return [...text.matchAll(/"method": "([^"]+)"/g)].map((match) => match[1] ?? "");
+}

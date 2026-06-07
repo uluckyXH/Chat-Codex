@@ -10,6 +10,7 @@ import type {
   CodexModelListOptions,
   CodexModelOption,
   CodexModelPolicy,
+  CodexProgressKind,
   CodexRunPolicyStatus,
   CodexSession,
   CodexSessionReloadResult,
@@ -27,6 +28,7 @@ import { approvalFromServerRequest, responseForApprovalDecision } from "./app-se
 import { goalFromResponse, goalFromSetResponse } from "./app-server/goal-api.js";
 import { appServerUserInput } from "./app-server/input-mapper.js";
 import { appServerErrorMessage, isTransientAppServerError } from "./app-server/notification-mapper.js";
+import { unsupportedServerRequestResponse } from "./app-server/server-request-mapper.js";
 import {
   cloneModelPolicy,
   modelInfoFromResponse,
@@ -520,8 +522,189 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   private handleNotification(notification: JsonRpcNotification): void {
+    this.handleServerRequestResolvedNotification(notification);
+    this.handleStatusNotification(notification);
     this.handleCompactNotification(notification);
     this.turns.handleNotification(notification);
+  }
+
+  private handleServerRequestResolvedNotification(notification: JsonRpcNotification): void {
+    if (notification.method !== "serverRequest/resolved") return;
+    const params = objectValue(notification.params);
+    const requestId = params.requestId !== undefined && params.requestId !== null
+      ? String(params.requestId)
+      : stringValue(params.id);
+    if (!requestId) return;
+    const pending = this.pendingApprovals.get(requestId);
+    if (!pending) return;
+    this.pendingApprovals.delete(requestId);
+    const sessionId = this.sessionStore.resolveThreadSession(stringValue(params.threadId) ?? pending.sessionId);
+    const stored = this.sessionStore.get(sessionId);
+    if (stored) {
+      stored.status = withContext(stored, { type: "running", turnId: pending.turnId, startedAt: runningStartedAt(stored.status) });
+      stored.updatedAt = new Date().toISOString();
+    }
+    this.turns.pushTurnEvent(pending.turnId, {
+      type: "approval.resolved",
+      sessionId,
+      turnId: pending.turnId,
+      adapterApprovalId: requestId,
+    });
+  }
+
+  private handleStatusNotification(notification: JsonRpcNotification): void {
+    const params = objectValue(notification.params);
+    const threadId = stringValue(params.threadId);
+    const sessionId = threadId ? this.sessionStore.resolveThreadSession(threadId) : undefined;
+    if (notification.method === "thread/name/updated" && sessionId) {
+      const stored = this.sessionStore.get(sessionId);
+      const title = stringValue(params.threadName) ?? stringValue(params.name);
+      if (stored && title) {
+        stored.session.title = title;
+        stored.updatedAt = new Date().toISOString();
+      }
+      return;
+    }
+    if (notification.method === "thread/settings/updated" && sessionId) {
+      const stored = this.sessionStore.get(sessionId);
+      const settings = objectValue(params.threadSettings);
+      if (stored) {
+        const cwd = stringValue(settings.cwd);
+        if (cwd) stored.session.cwd = cwd;
+        const model = stringValue(settings.model);
+        const provider = stringValue(settings.modelProvider);
+        const serviceTier = Object.prototype.hasOwnProperty.call(settings, "serviceTier")
+          ? stringValue(settings.serviceTier) ?? null
+          : undefined;
+        const reasoningEffort = Object.prototype.hasOwnProperty.call(settings, "effort")
+          ? stringValue(settings.effort) ?? null
+          : undefined;
+        const baseModel = model || provider || serviceTier !== undefined || reasoningEffort !== undefined
+          ? {
+              ...(model ? { model } : {}),
+              ...(provider ? { provider } : {}),
+              ...(serviceTier !== undefined ? { serviceTier } : {}),
+              ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+            }
+          : undefined;
+        if (baseModel) {
+          stored.baseModel = baseModel;
+          const modelWithPolicy = modelInfoWithPolicy(baseModel, this.modelPolicyForSession(sessionId));
+          stored.status = modelWithPolicy ? { ...stored.status, model: modelWithPolicy } : withoutModelInfo(stored.status);
+        }
+        stored.updatedAt = new Date().toISOString();
+      }
+      return;
+    }
+    if (notification.method === "thread/status/changed" && sessionId) {
+      const stored = this.sessionStore.get(sessionId);
+      const status = objectValue(params.status);
+      const statusType = stringValue(status.type);
+      const activeFlags = Array.isArray(status.activeFlags) ? status.activeFlags.filter((item) => typeof item === "string") : [];
+      if (stored) {
+        if (statusType === "idle") {
+          stored.status = withContext(stored, { type: "idle" });
+          stored.currentTurnId = undefined;
+        } else if (statusType === "active" && activeFlags.includes("waitingOnApproval")) {
+          stored.status = withContext(stored, { type: "waiting_approval", detail: "Codex 等待审批", startedAt: runningStartedAt(stored.status) });
+        } else if (statusType === "active" && activeFlags.includes("waitingOnUserInput")) {
+          stored.status = withContext(stored, { type: "waiting_input", detail: "Codex 等待用户输入", startedAt: runningStartedAt(stored.status) });
+        } else if (statusType === "active") {
+          stored.status = withContext(stored, {
+            type: "running",
+            ...(stored.currentTurnId ? { turnId: stored.currentTurnId } : {}),
+            startedAt: runningStartedAt(stored.status),
+          });
+        } else if (statusType === "systemError") {
+          stored.status = withContext(stored, { type: "unknown", detail: "thread system error" });
+          stored.currentTurnId = undefined;
+        } else if (statusType === "notLoaded") {
+          stored.status = withContext(stored, { type: "unknown", detail: "thread not loaded" });
+          stored.currentTurnId = undefined;
+        }
+        stored.updatedAt = new Date().toISOString();
+      }
+      return;
+    }
+    if ((notification.method === "thread/archived" || notification.method === "thread/closed") && sessionId) {
+      const stored = this.sessionStore.get(sessionId);
+      if (stored) {
+        const detail = notification.method === "thread/archived" ? "thread archived" : "thread closed";
+        stored.status = withContext(stored, { type: "unknown", detail });
+        stored.currentTurnId = undefined;
+        stored.updatedAt = new Date().toISOString();
+      }
+      this.emitCodexNotification({
+        method: notification.method,
+        sessionId,
+        turnId: this.notificationTurnId(sessionId, params, notification.method),
+        kind: "lifecycle",
+        lifecycle: notification.method === "thread/archived" ? "archived" : "closed",
+        unbindRoute: true,
+        text: notification.method === "thread/archived" ? "Codex thread archived." : "Codex thread closed.",
+        dedupeWindowMs: 10 * 60_000,
+      });
+      return;
+    }
+    if (notification.method === "thread/unarchived" && sessionId) {
+      const stored = this.sessionStore.get(sessionId);
+      if (stored && stored.status.type === "unknown" && stored.status.detail === "thread archived") {
+        stored.status = withContext(stored, { type: "idle" });
+        stored.updatedAt = new Date().toISOString();
+      }
+      return;
+    }
+    if (notification.method === "model/rerouted" && sessionId) {
+      const stored = this.sessionStore.get(sessionId);
+      const fromModel = stringValue(params.fromModel);
+      const toModel = stringValue(params.toModel);
+      if (stored && toModel) {
+        stored.status = {
+          ...stored.status,
+          model: { ...(stored.status.model ?? {}), model: toModel },
+        };
+        stored.updatedAt = new Date().toISOString();
+      }
+      this.emitCodexNotification({
+        method: notification.method,
+        sessionId,
+        turnId: stringValue(params.turnId),
+        kind: "model",
+        text: [
+          "Codex 模型已切换。",
+          `From: ${fromModel ?? "未知"}`,
+          `To: ${toModel ?? "未知"}`,
+          `Reason: ${stringValue(params.reason) ?? "未知"}`,
+        ].join("\n"),
+        dedupeWindowMs: 10 * 60_000,
+      });
+      return;
+    }
+    if (notification.method === "model/verification" && sessionId) {
+      const verifications = Array.isArray(params.verifications) ? params.verifications.map(formatNotificationValue) : [];
+      if (verifications.length > 0) {
+        this.emitCodexNotification({
+          method: notification.method,
+          sessionId,
+          turnId: stringValue(params.turnId),
+          kind: "security",
+          text: ["Codex 模型校验：", ...verifications.map((item) => `- ${item}`)].join("\n"),
+          dedupeWindowMs: 10 * 60_000,
+        });
+      }
+      return;
+    }
+    const warning = notificationText(notification.method, params);
+    if (warning && sessionId) {
+      this.emitCodexNotification({
+        method: notification.method,
+        sessionId,
+        turnId: this.notificationTurnId(sessionId, params, notification.method),
+        kind: warning.kind,
+        text: warning.text,
+        dedupeWindowMs: warning.dedupeWindowMs,
+      });
+    }
   }
 
   private handleCompactNotification(notification: JsonRpcNotification): void {
@@ -601,7 +784,13 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const params = objectValue(request.params);
     const approval = approvalFromServerRequest(request.method, request.id, params);
     if (!approval) {
-      this.writeMessage({ id: request.id, error: { code: -32601, message: `unsupported server request: ${request.method}` } });
+      const fallback = unsupportedServerRequestResponse(request.method, params);
+      if (fallback.notice) this.emitProgressNotice(fallback.notice);
+      this.writeMessage({
+        id: request.id,
+        ...(fallback.result ? { result: fallback.result } : {}),
+        ...(fallback.error ? { error: fallback.error } : {}),
+      });
       return;
     }
     const adapterApprovalId = String(request.id);
@@ -647,6 +836,101 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   private writeMessage(message: unknown): void {
     this.rpc.writeMessage(message);
+  }
+
+  private emitProgressNotice(notice: { sessionId?: string; turnId?: string; text: string; kind?: CodexProgressKind }): void {
+    if (!notice.sessionId && !notice.turnId) return;
+    const sessionId = notice.sessionId ? this.sessionStore.resolveThreadSession(notice.sessionId) : undefined;
+    const stored = sessionId ? this.sessionStore.get(sessionId) : undefined;
+    const turnId = notice.turnId ?? stored?.currentTurnId;
+    if (!sessionId || !turnId) return;
+    this.turns.get(turnId) ?? this.turns.createBackgroundTurn(sessionId, turnId);
+    this.turns.pushTurnEvent(turnId, {
+      type: "assistant.progress",
+      sessionId,
+      turnId,
+      text: notice.text,
+      kind: notice.kind,
+    });
+  }
+
+  private emitCodexNotification(notification: {
+    method: string;
+    sessionId: string;
+    turnId?: string;
+    kind: "security" | "warning" | "model" | "config" | "lifecycle" | "deprecation";
+    text: string;
+    dedupeWindowMs: number;
+    lifecycle?: "archived" | "closed" | "unarchived";
+    unbindRoute?: boolean;
+  }): void {
+    const stored = this.sessionStore.get(notification.sessionId);
+    const turnId = notification.turnId ?? this.notificationTurnId(notification.sessionId, {}, notification.method);
+    this.turns.pushTurnOrBackgroundEvent({
+      type: "codex.notification",
+      sessionId: notification.sessionId,
+      turnId,
+      notification: {
+        method: notification.method,
+        kind: notification.kind,
+        text: notification.text,
+        dedupeKey: notificationDedupeKey(notification.method, notification.sessionId, notification.text),
+        dedupeWindowMs: notification.dedupeWindowMs,
+        ...(notification.lifecycle ? { lifecycle: notification.lifecycle } : {}),
+        ...(notification.unbindRoute ? { unbindRoute: true } : {}),
+      },
+    });
+    if (stored) stored.updatedAt = new Date().toISOString();
+  }
+
+  private notificationTurnId(sessionId: string, params: Record<string, unknown>, method: string): string {
+    const turnId = stringValue(params.turnId);
+    if (turnId) return turnId;
+    const stored = this.sessionStore.get(sessionId);
+    if (stored?.currentTurnId) return stored.currentTurnId;
+    return `notification:${sessionId}:${method}:${Date.now()}`;
+  }
+}
+
+function notificationText(method: string, params: Record<string, unknown>): { text: string; kind: "security" | "warning" | "config" | "deprecation"; dedupeWindowMs: number } | undefined {
+  if (method === "warning") {
+    const message = stringValue(params.message);
+    return message ? { text: `Codex 警告：${message}`, kind: "warning", dedupeWindowMs: 10 * 60_000 } : undefined;
+  }
+  if (method === "guardianWarning") {
+    const message = stringValue(params.message);
+    return message ? { text: `Codex 安全提示：${message}`, kind: "security", dedupeWindowMs: 10 * 60_000 } : undefined;
+  }
+  if (method === "deprecationNotice") {
+    const summary = stringValue(params.summary);
+    const details = stringValue(params.details);
+    const text = summary ? [`Codex 兼容性提示：${summary}`, details].filter(Boolean).join("\n") : undefined;
+    return text ? { text, kind: "deprecation", dedupeWindowMs: 30 * 60_000 } : undefined;
+  }
+  if (method === "configWarning") {
+    const summary = stringValue(params.summary);
+    const details = stringValue(params.details);
+    const configPath = stringValue(params.path);
+    const text = summary ? [`Codex 配置警告：${summary}`, details, configPath ? `Path: ${configPath}` : undefined].filter(Boolean).join("\n") : undefined;
+    return text ? { text, kind: "config", dedupeWindowMs: 30 * 60_000 } : undefined;
+  }
+  if (method === "windows/worldWritableWarning") {
+    const message = stringValue(params.message) ?? stringValue(params.summary);
+    return message ? { text: `Codex Windows 沙箱警告：${message}`, kind: "warning", dedupeWindowMs: 30 * 60_000 } : undefined;
+  }
+  return undefined;
+}
+
+function notificationDedupeKey(method: string, sessionId: string, text: string): string {
+  return `${method}:${sessionId}:${text}`;
+}
+
+function formatNotificationValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
   }
 }
 

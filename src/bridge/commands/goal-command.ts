@@ -2,7 +2,7 @@ import type { CodexAdapter, CodexGoal, CodexGoalStatus } from "../../codex/types
 import type { ChannelMessage, ChannelTarget } from "../../protocol/channel.js";
 import type { MemoryStateStore } from "../../state/memory-state-store.js";
 import type { BridgeDelivery } from "../delivery.js";
-import type { BridgeSessionFlow } from "../session-flow.js";
+import { isMissingCodexThreadError, StaleCodexSessionBindingError, type BridgeSessionFlow } from "../session-flow.js";
 import {
   commandBody,
   formatDuration,
@@ -67,6 +67,12 @@ export async function handleGoalCommand(
     const goal = await options.codex.setGoal(session.id, body);
     await options.delivery.sendText(target, goalText(goal, "已设置 Goal。"));
   } catch (error) {
+    const staleSessionId = staleSessionIdFromError(error) ?? binding?.sessionId;
+    if (staleSessionId && (error instanceof StaleCodexSessionBindingError || isMissingCodexThreadError(error))) {
+      options.state.unbindSession(message.routeKey);
+      await options.delivery.sendText(target, staleGoalBindingText(options.sessionFlow, message, staleSessionId));
+      return;
+    }
     await options.delivery.sendText(target, goalErrorText(error));
   }
 }
@@ -92,4 +98,18 @@ export function goalText(goal: CodexGoal | null, title = "**Goal**"): string {
     "- `/goal resume`：恢复追踪，让 Codex 继续按该目标推进。",
     "- `/goal clear`：清除目标，也就是退出当前 Goal 追踪。",
   ].filter(Boolean).join("\n");
+}
+
+function staleSessionIdFromError(error: unknown): string | undefined {
+  return error instanceof StaleCodexSessionBindingError ? error.sessionId : undefined;
+}
+
+function staleGoalBindingText(sessionFlow: BridgeSessionFlow, message: ChannelMessage, sessionId: string): string {
+  return [
+    "已清理失效的 Codex 会话绑定。",
+    `原 Session: ${sessionId}`,
+    "Codex 本地历史/rollout 不存在，无法读取或更新这个 Goal。",
+    "",
+    sessionFlow.unboundRoutePromptText(message),
+  ].join("\n");
 }

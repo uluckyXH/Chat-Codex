@@ -1,5 +1,5 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
-import type { CodexAdapter, CodexCollaborationMode, CodexProgressKind, CodexPromptInput } from "../codex/types.js";
+import type { CodexAdapter, CodexCollaborationMode, CodexProgressKind, CodexPromptInput, CodexSessionStatus } from "../codex/types.js";
 import { codexInputPlainText, codexInputText, withCodexInputText } from "../codex/input.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelMessage, ChannelTarget } from "../protocol/channel.js";
@@ -12,7 +12,9 @@ import { TurnSchedulerAbortError } from "./turn-scheduler.js";
 import type { BridgeDelivery } from "./delivery.js";
 import type { SessionContextRefreshManager } from "./context-refresh.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
+import { BridgeNotificationDelivery } from "./notification-delivery.js";
 import type { BridgeSessionFlow } from "./session-flow.js";
+import { StaleCodexSessionBindingError, type StaleCodexSessionBindingInfo } from "./session-flow.js";
 import {
   composeFinalAnswer,
   truncateForChannel,
@@ -36,6 +38,7 @@ export interface BridgeRouteQueueOptions {
     kind: CodexProgressKind | undefined,
   ): boolean;
   progressDelivery?: BridgeProgressDelivery;
+  notificationDelivery?: BridgeNotificationDelivery;
   contextRefresh?: SessionContextRefreshManager;
 }
 
@@ -52,6 +55,7 @@ export class BridgeRouteQueue {
   private readonly deliveryPolicyFor: BridgeRouteQueueOptions["deliveryPolicyFor"];
   private readonly contextRefresh?: SessionContextRefreshManager;
   private readonly progressDelivery: BridgeProgressDelivery;
+  private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly queues = new Map<string, QueuedPrompt[]>();
   private readonly workers = new Map<string, Promise<void>>();
   private readonly abortControllers = new Map<string, AbortController>();
@@ -72,6 +76,10 @@ export class BridgeRouteQueue {
       delivery: this.delivery,
       transcript: this.transcript,
       shouldDeliverProgress: options.shouldDeliverProgressWithPolicy,
+    });
+    this.notificationDelivery = options.notificationDelivery ?? new BridgeNotificationDelivery({
+      state: this.state,
+      delivery: this.delivery,
     });
   }
 
@@ -163,6 +171,10 @@ export class BridgeRouteQueue {
         await this.forwardPrompt(task.message, task.target, task.input, queue?.length ?? 0, task.sendFile, task.collaborationMode);
       } catch (error) {
         if (error instanceof TurnSchedulerAbortError) continue;
+        if (error instanceof StaleCodexSessionBindingError) {
+          await this.delivery.sendText(task.target, this.staleBindingClearedText(task.message, error));
+          continue;
+        }
         await this.delivery.sendText(task.target, `Codex 执行失败: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -177,9 +189,20 @@ export class BridgeRouteQueue {
     collaborationMode: CodexCollaborationMode | undefined,
   ): Promise<void> {
     const refreshMode = this.contextRefresh?.effectivePolicy(message.routeKey).policy.mode;
+    const staleBindingsCleared: StaleCodexSessionBindingInfo[] = [];
     const session = await this.sessionFlow.ensureSession(message, {
       recordResumeSnapshot: !refreshMode || refreshMode === "off",
+      onStaleBindingCleared: (info) => {
+        staleBindingsCleared.push(info);
+      },
     });
+    for (const stale of staleBindingsCleared) {
+      await this.delivery.sendText(target, [
+        "已清理失效的 Codex 会话绑定，已为本条消息创建新会话。",
+        `原 Session: ${stale.sessionId}`,
+        `新 Session: ${session.id}`,
+      ].join("\n"));
+    }
     const refreshResult = await this.contextRefresh?.beforeRun({
       routeKey: message.routeKey,
       sessionId: session.id,
@@ -234,6 +257,12 @@ export class BridgeRouteQueue {
                 text: event.text,
                 kind: event.kind,
               });
+            } else if (event.type === "codex.notification") {
+              await this.notificationDelivery.deliver({
+                routeKey: message.routeKey,
+                target,
+                event,
+              });
             } else if (event.type === "assistant.plan") {
               finalPlanText = event.text;
             } else if (event.type === "assistant.delta") {
@@ -248,8 +277,22 @@ export class BridgeRouteQueue {
               });
               const pending = this.approvals.create(message.routeKey, message.sender.id, event.approval);
               await this.delivery.sendApprovalTextUntilDelivered(message.routeKey, target, pending);
+            } else if (event.type === "approval.resolved") {
+              this.approvals.resolveAdapterApproval(
+                message.routeKey,
+                event.adapterApprovalId,
+                "Codex 已在 app-server 侧解决该请求。",
+              );
+              this.state.setSessionStatus(session.id, {
+                type: "running",
+                turnId: event.turnId,
+                task: truncateForChannel(promptText || codexInputPlainText(prompt), 120),
+                startedAt: currentTurnStartedAt,
+              });
             } else if (event.type === "turn.completed") {
-              this.state.setSessionStatus(session.id, { type: "idle" });
+              if (!isTerminalLifecycleStatus(this.state.getSession(session.id)?.status)) {
+                this.state.setSessionStatus(session.id, { type: "idle" });
+              }
             } else if (event.type === "turn.failed") {
               this.state.setSessionStatus(session.id, { type: "failed", error: event.error });
               await this.progressDelivery.flushRoute(message.routeKey);
@@ -276,4 +319,18 @@ export class BridgeRouteQueue {
       }
     }
   }
+
+  private staleBindingClearedText(message: ChannelMessage, error: StaleCodexSessionBindingError): string {
+    return [
+      "已清理失效的 Codex 会话绑定。",
+      `原 Session: ${error.sessionId}`,
+      "Codex 本地历史/rollout 不存在，无法恢复这个会话。",
+      "",
+      this.sessionFlow.unboundRoutePromptText(message),
+    ].join("\n");
+  }
+}
+
+function isTerminalLifecycleStatus(status: CodexSessionStatus | undefined): boolean {
+  return status?.type === "unknown" && (status.detail === "thread archived" || status.detail === "thread closed");
 }

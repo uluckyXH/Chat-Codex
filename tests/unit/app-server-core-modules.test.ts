@@ -89,6 +89,54 @@ test("app-server turn controller maps notifications to queued events and status 
   assert.equal(controller.hasActiveTurns(), false);
 });
 
+test("app-server turn controller emits notifications even after the turn is closed", async () => {
+  const sessions = new Map();
+  sessions.set("session-1", {
+    session: { id: "session-1", cwd: "/repo", createdAt: "now" },
+    status: { type: "idle" },
+    updatedAt: "now",
+  });
+  const controller = new AppServerTurnController({ sessions, threadToSession: new Map() });
+  const queue = new AsyncEventQueue<CodexEvent>();
+  const backgroundEvent = new Promise<CodexEvent>((resolve) => {
+    controller.onBackgroundEvent((event) => {
+      resolve(event);
+    });
+  });
+  controller.registerTurn("session-1", "turn-1", queue);
+  controller.closeTurn("turn-1", "idle");
+
+  controller.pushTurnOrBackgroundEvent({
+    type: "codex.notification",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    notification: {
+      method: "thread/archived",
+      kind: "lifecycle",
+      text: "archived",
+      dedupeKey: "thread/archived:session-1",
+      dedupeWindowMs: 10 * 60_000,
+      lifecycle: "archived",
+      unbindRoute: true,
+    },
+  });
+
+  assert.deepEqual(await backgroundEvent, {
+    type: "codex.notification",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    notification: {
+      method: "thread/archived",
+      kind: "lifecycle",
+      text: "archived",
+      dedupeKey: "thread/archived:session-1",
+      dedupeWindowMs: 10 * 60_000,
+      lifecycle: "archived",
+      unbindRoute: true,
+    },
+  });
+});
+
 test("app-server rpc client starts stdio server, dispatches responses, notifications, and stop", async () => {
   const dir = await mkdtemp(join(tmpdir(), "chat-codex-rpc-"));
   const bin = join(dir, "fake-codex.mjs");

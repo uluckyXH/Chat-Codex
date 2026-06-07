@@ -47,6 +47,24 @@ export interface BridgeSessionFlowOptions {
 
 export interface EnsureSessionOptions {
   recordResumeSnapshot?: boolean;
+  onStaleBindingCleared?(info: StaleCodexSessionBindingInfo): void | Promise<void>;
+}
+
+export interface StaleCodexSessionBindingInfo {
+  routeKey: string;
+  sessionId: string;
+}
+
+export class StaleCodexSessionBindingError extends Error {
+  readonly routeKey: string;
+  readonly sessionId: string;
+
+  constructor(info: StaleCodexSessionBindingInfo) {
+    super(`Codex 会话已失效，无法恢复: ${info.sessionId}`);
+    this.name = "StaleCodexSessionBindingError";
+    this.routeKey = info.routeKey;
+    this.sessionId = info.sessionId;
+  }
 }
 
 export class BridgeSessionFlow {
@@ -144,7 +162,27 @@ export class BridgeSessionFlow {
     if (binding) {
       const stored = this.state.getSession(binding.sessionId);
       if (stored) return stored.session;
-      const session = await this.codex.resumeSession(binding.sessionId);
+      let session: CodexSession;
+      try {
+        session = await this.codex.resumeSession(binding.sessionId);
+      } catch (error) {
+        if (!isMissingCodexThreadError(error)) throw error;
+        this.state.unbindSession(message.routeKey);
+        if (this.unboundRoutePolicy === "ask" && !this.shouldConsumePendingInitialRouteBinding(message)) {
+          throw new StaleCodexSessionBindingError({
+            routeKey: message.routeKey,
+            sessionId: binding.sessionId,
+          });
+        }
+        await options.onStaleBindingCleared?.({
+          routeKey: message.routeKey,
+          sessionId: binding.sessionId,
+        });
+        if (this.shouldConsumePendingInitialRouteBinding(message)) {
+          return await this.consumePendingInitialRouteBinding(message, options);
+        }
+        return await this.createSessionForRoute(message);
+      }
       const activated = this.state.activateOwnedSession(message.routeKey, session);
       if (!activated.ok) {
         throw new Error(`Codex session is owned by another route: ${activated.owner?.ownerRouteKey ?? "unknown"}`);
@@ -156,18 +194,9 @@ export class BridgeSessionFlow {
       return session;
     }
     if (this.shouldConsumePendingInitialRouteBinding(message)) {
-      return await this.consumePendingInitialRouteBinding(message);
+      return await this.consumePendingInitialRouteBinding(message, options);
     }
-    const session = await this.codex.startSession({
-      routeKey: message.routeKey,
-      cwd: this.cwd,
-      title: `channel:${message.routeKey}`,
-    });
-    this.state.bindSession(message.routeKey, session);
-    this.applyStoredSessionRunPolicy(session.id);
-    this.applyRouteCollaborationModeToSession(message.routeKey, session.id);
-    await this.recordSnapshot(session.id, "bind");
-    return session;
+    return await this.createSessionForRoute(message);
   }
 
   async resumeOrUseSession(
@@ -377,21 +406,16 @@ export class BridgeSessionFlow {
     return lines.join("\n");
   }
 
-  private async consumePendingInitialRouteBinding(message: ChannelMessage): Promise<CodexSession> {
+  private async consumePendingInitialRouteBinding(
+    message: ChannelMessage,
+    options: EnsureSessionOptions = {},
+  ): Promise<CodexSession> {
     const persisted = this.state.consumePendingBindingForMessage(message);
     const pending = persisted?.binding ?? this.pendingInitialRouteBinding;
     this.pendingInitialRouteBinding = undefined;
     this.pendingInitialRouteKey = undefined;
     if (!pending || pending.type === "new") {
-      const session = await this.codex.startSession({
-        routeKey: message.routeKey,
-        cwd: this.cwd,
-        title: `channel:${message.routeKey}`,
-      });
-      this.state.bindSession(message.routeKey, session);
-      this.applyStoredSessionRunPolicy(session.id);
-      this.applyRouteCollaborationModeToSession(message.routeKey, session.id);
-      return session;
+      return await this.createSessionForRoute(message, { recordBindSnapshot: false });
     }
 
     const sessionId = pending.sessionId;
@@ -406,6 +430,20 @@ export class BridgeSessionFlow {
       session = await this.codex.resumeSession(sessionId);
     } catch (error) {
       if ("newlyClaimed" in claim && claim.newlyClaimed) this.state.rollbackSessionOwnerClaim(message.routeKey, sessionId);
+      if (isMissingCodexThreadError(error)) {
+        this.state.rollbackSessionOwnerClaim(message.routeKey, sessionId);
+        if (this.unboundRoutePolicy === "ask") {
+          throw new StaleCodexSessionBindingError({
+            routeKey: message.routeKey,
+            sessionId,
+          });
+        }
+        await options.onStaleBindingCleared?.({
+          routeKey: message.routeKey,
+          sessionId,
+        });
+        return await this.createSessionForRoute(message);
+      }
       throw error;
     }
     const activated = this.state.activateOwnedSession(message.routeKey, session);
@@ -419,6 +457,24 @@ export class BridgeSessionFlow {
       this.syncRouteCollaborationModeFromSession(message.routeKey, session.id);
     }
     this.applyStoredSessionRunPolicy(session.id);
+    return session;
+  }
+
+  private async createSessionForRoute(
+    message: ChannelMessage,
+    options: { recordBindSnapshot?: boolean } = {},
+  ): Promise<CodexSession> {
+    const session = await this.codex.startSession({
+      routeKey: message.routeKey,
+      cwd: this.cwd,
+      title: `channel:${message.routeKey}`,
+    });
+    this.state.bindSession(message.routeKey, session);
+    this.applyStoredSessionRunPolicy(session.id);
+    this.applyRouteCollaborationModeToSession(message.routeKey, session.id);
+    if (options.recordBindSnapshot ?? true) {
+      await this.recordSnapshot(session.id, "bind");
+    }
     return session;
   }
 
@@ -491,4 +547,10 @@ export class BridgeSessionFlow {
       intro,
     });
   }
+}
+
+export function isMissingCodexThreadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bno rollout found for (?:thread|conversation) id\b/i.test(message)
+    || /\bThreadNotFound\b/.test(message);
 }

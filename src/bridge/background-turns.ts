@@ -9,6 +9,7 @@ import type { BackgroundTurnState } from "./bridge-types.js";
 import { composeFinalAnswer } from "./formatters.js";
 import type { BridgeDelivery } from "./delivery.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
+import { BridgeNotificationDelivery } from "./notification-delivery.js";
 
 export interface BridgeBackgroundTurnsOptions {
   state: MemoryStateStore;
@@ -25,6 +26,7 @@ export interface BridgeBackgroundTurnsOptions {
     kind: CodexProgressKind | undefined,
   ): boolean;
   progressDelivery?: BridgeProgressDelivery;
+  notificationDelivery?: BridgeNotificationDelivery;
   startRouteWorker(routeKey: string): void;
   routeQueueLength(routeKey: string): number;
   hasRouteWorker(routeKey: string): boolean;
@@ -40,6 +42,7 @@ export class BridgeBackgroundTurns {
   private readonly routeTargets: Map<string, ChannelTarget>;
   private readonly deliveryPolicyFor: BridgeBackgroundTurnsOptions["deliveryPolicyFor"];
   private readonly progressDelivery: BridgeProgressDelivery;
+  private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly startRouteWorker: BridgeBackgroundTurnsOptions["startRouteWorker"];
   private readonly routeQueueLength: BridgeBackgroundTurnsOptions["routeQueueLength"];
   private readonly hasRouteWorker: BridgeBackgroundTurnsOptions["hasRouteWorker"];
@@ -59,6 +62,10 @@ export class BridgeBackgroundTurns {
       transcript: this.transcript,
       shouldDeliverProgress: options.shouldDeliverProgressWithPolicy,
     });
+    this.notificationDelivery = options.notificationDelivery ?? new BridgeNotificationDelivery({
+      state: this.state,
+      delivery: this.delivery,
+    });
     this.startRouteWorker = options.startRouteWorker;
     this.routeQueueLength = options.routeQueueLength;
     this.hasRouteWorker = options.hasRouteWorker;
@@ -73,7 +80,8 @@ export class BridgeBackgroundTurns {
   }
 
   async handle(event: CodexEvent): Promise<void> {
-    const state = this.turns.get(event.turnId) ?? this.createTurnState(event);
+    const existingState = this.turns.get(event.turnId);
+    const state = existingState ?? this.createTurnState(event);
     if (!state) return;
     const deliveryPolicy = this.deliveryPolicyFor(state.message);
     if (event.type === "turn.started") {
@@ -92,6 +100,13 @@ export class BridgeBackgroundTurns {
         text: event.text,
         kind: event.kind,
       });
+    } else if (event.type === "codex.notification") {
+      await this.notificationDelivery.deliver({
+        routeKey: state.routeKey,
+        target: state.target,
+        event,
+      });
+      if (!existingState) this.turns.delete(event.turnId);
     } else if (event.type === "assistant.plan") {
       state.finalPlanText = event.text;
     } else if (event.type === "assistant.delta") {
@@ -106,8 +121,22 @@ export class BridgeBackgroundTurns {
       });
       const pending = this.approvals.create(state.routeKey, state.message.sender.id, event.approval);
       await this.delivery.sendApprovalTextUntilDelivered(state.routeKey, state.target, pending);
+    } else if (event.type === "approval.resolved") {
+      this.approvals.resolveAdapterApproval(
+        state.routeKey,
+        event.adapterApprovalId,
+        "Codex 已在 app-server 侧解决该请求。",
+      );
+      this.state.setSessionStatus(event.sessionId, {
+        type: "running",
+        turnId: event.turnId,
+        task: "Goal 自动续跑",
+        startedAt: currentStartedAt(this.state.getSession(event.sessionId)?.status),
+      });
     } else if (event.type === "turn.completed") {
-      this.state.setSessionStatus(event.sessionId, { type: "idle" });
+      if (!isTerminalLifecycleStatus(this.state.getSession(event.sessionId)?.status)) {
+        this.state.setSessionStatus(event.sessionId, { type: "idle" });
+      }
       await this.finishTurn(event.turnId, state);
     } else if (event.type === "turn.failed") {
       this.state.setSessionStatus(event.sessionId, { type: "failed", error: event.error });
@@ -159,4 +188,8 @@ export class BridgeBackgroundTurns {
 
 function currentStartedAt(status: CodexSessionStatus | undefined): string | undefined {
   return status && "startedAt" in status ? status.startedAt : undefined;
+}
+
+function isTerminalLifecycleStatus(status: CodexSessionStatus | undefined): boolean {
+  return status?.type === "unknown" && (status.detail === "thread archived" || status.detail === "thread closed");
 }

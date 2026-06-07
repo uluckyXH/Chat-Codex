@@ -289,6 +289,34 @@ rl.on("line", (line) => {
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
       return;
     }
+    if (prompt.includes("request user input unsupported")) {
+      send({ method: "item/tool/requestUserInput", id: "input-1", params: { threadId, turnId, itemId: "input-item-1", questions: [{ id: "confirm_path", header: "确认路径", question: "是否继续？", isOther: false, isSecret: false, options: null }] } });
+      return;
+    }
+    if (prompt.includes("mcp elicitation unsupported")) {
+      send({ method: "mcpServer/elicitation/request", id: "mcp-1", params: { threadId, turnId, serverName: "private-app", mode: "url", message: "需要授权", url: "https://example.test/auth", elicitationId: "elicitation-1", _meta: null } });
+      return;
+    }
+    if (prompt.includes("dynamic tool unsupported")) {
+      send({ method: "item/tool/call", id: "tool-1", params: { threadId, turnId, callId: "call-1", namespace: "bridge", tool: "dangerous", arguments: {} } });
+      return;
+    }
+    if (prompt.includes("approval resolved externally")) {
+      send({ method: "item/commandExecution/requestApproval", id: "approval-external", params: { threadId, turnId, itemId: "cmd-external", startedAtMs: Date.now(), command: "touch externally-approved.txt", cwd: message.params.cwd, reason: "external approval" } });
+      send({ method: "serverRequest/resolved", params: { threadId, requestId: "approval-external" } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "external resolved done", phase: null, memoryCitation: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+      return;
+    }
+    if (prompt.includes("status notifications")) {
+      send({ method: "thread/name/updated", params: { threadId, threadName: "Renamed Thread" } });
+      send({ method: "warning", params: { threadId, message: "配置即将变化" } });
+      send({ method: "model/rerouted", params: { threadId, turnId, fromModel: "fake", toModel: "fake-next", reason: "highRiskCyberActivity" } });
+      send({ method: "model/verification", params: { threadId, turnId, verifications: ["trustedAccessForCyber"] } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "status notifications done", phase: null, memoryCitation: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+      return;
+    }
     if (prompt.includes("progress")) {
       send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "reasoning", id: "reasoning-1", summary: [], content: [] } } });
       send({ method: "item/reasoning/summaryTextDelta", params: { threadId, turnId, itemId: "reasoning-1", summaryIndex: 0, delta: "我先确认当前状态。" } });
@@ -312,6 +340,21 @@ rl.on("line", (line) => {
   }
   if (message.id === "approval-1") {
     send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "decision " + message.result.decision, phase: null, memoryCitation: null } } });
+    send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+    return;
+  }
+  if (message.id === "input-1") {
+    send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "input fallback " + (message.error?.message || "ok"), phase: null, memoryCitation: null } } });
+    send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+    return;
+  }
+  if (message.id === "mcp-1") {
+    send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "mcp action " + message.result.action, phase: null, memoryCitation: null } } });
+    send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+    return;
+  }
+  if (message.id === "tool-1") {
+    send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "tool success " + message.result.success, phase: null, memoryCitation: null } } });
     send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
     return;
   }
@@ -368,6 +411,95 @@ test("AppServerCodexAdapter routes command approvals through resolveApproval", a
   assert.ok(events.some((event) => event.type === "approval.requested"));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "decision accept"));
   assert.ok(events.some((event) => event.type === "turn.completed"));
+});
+
+test("AppServerCodexAdapter rejects unsupported request_user_input visibly", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "request user input unsupported")) {
+    events.push(event);
+  }
+  await adapter.stop();
+
+  assert.ok(events.some((event) => event.type === "assistant.progress" && event.text.includes("额外用户输入")));
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text.includes("Chat-Codex 当前尚未支持")));
+});
+
+test("AppServerCodexAdapter cancels MCP elicitation and dynamic tool calls without enabling tools", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const mcpEvents: CodexEvent[] = [];
+  const toolEvents: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "mcp elicitation unsupported")) {
+    mcpEvents.push(event);
+  }
+  for await (const event of adapter.run(session.id, "dynamic tool unsupported")) {
+    toolEvents.push(event);
+  }
+  await adapter.stop();
+
+  assert.ok(mcpEvents.some((event) => event.type === "assistant.progress" && event.text.includes("MCP elicitation")));
+  assert.ok(mcpEvents.some((event) => event.type === "assistant.completed" && event.text === "mcp action cancel"));
+  assert.ok(toolEvents.some((event) => event.type === "assistant.progress" && event.text.includes("动态工具")));
+  assert.ok(toolEvents.some((event) => event.type === "assistant.completed" && event.text === "tool success false"));
+});
+
+test("AppServerCodexAdapter clears pending approvals when app-server resolves request elsewhere", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "approval resolved externally")) {
+    events.push(event);
+  }
+  await adapter.stop();
+
+  assert.ok(events.some((event) => event.type === "approval.requested" && event.approval.adapterApprovalId === "approval-external"));
+  assert.ok(events.some((event) => event.type === "approval.resolved" && event.adapterApprovalId === "approval-external"));
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "external resolved done"));
+  await assert.rejects(() => adapter.resolveApproval("approval-external", "approve"), /未找到/);
+});
+
+test("AppServerCodexAdapter maps status notifications into session state and notification events", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "status notifications")) {
+    events.push(event);
+  }
+  const sessions = await adapter.listSessions("route-1");
+  const status = await adapter.getStatus(session.id);
+  await adapter.stop();
+
+  assert.equal(sessions[0]?.title, "Renamed Thread");
+  assert.equal(status.model?.model, "fake-next");
+  assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("Codex 警告")));
+  assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("From: fake") && event.notification.text.includes("To: fake-next")));
+  assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("trustedAccessForCyber")));
 });
 
 test("AppServerCodexAdapter sets thread names through app-server", async () => {

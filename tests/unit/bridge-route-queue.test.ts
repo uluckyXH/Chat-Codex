@@ -6,6 +6,7 @@ import { SessionContextRefreshManager } from "../../src/bridge/context-refresh.j
 import { BridgeRouteQueue } from "../../src/bridge/route-queue.js";
 import { BridgeSessionFlow } from "../../src/bridge/session-flow.js";
 import { UnlimitedTurnScheduler } from "../../src/bridge/turn-scheduler.js";
+import type { UnboundRoutePolicy } from "../../src/bridge/bridge-types.js";
 import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
 import type { CodexEvent, CodexPromptInput } from "../../src/codex/types.js";
 import type { CodexSessionContextFingerprint } from "../../src/codex/session-context-fingerprint.js";
@@ -13,7 +14,7 @@ import { codexInputPlainText } from "../../src/codex/input.js";
 import { SilentLogger } from "../../src/logging/logger.js";
 import type { ChannelRegistry } from "../../src/channels/registry.js";
 import type { ChannelMessage, ChannelTarget } from "../../src/protocol/channel.js";
-import { DEFAULT_CHANNEL_DELIVERY_POLICY } from "../../src/protocol/delivery-policy.js";
+import { DEFAULT_CHANNEL_DELIVERY_POLICY, type ChannelDeliveryPolicy } from "../../src/protocol/delivery-policy.js";
 import { MemoryStateStore } from "../../src/state/memory-state-store.js";
 import { SessionBindings } from "../../src/state/session-bindings.js";
 
@@ -26,6 +27,59 @@ test("BridgeRouteQueue forwards prompts and sends final replies", async () => {
   assert.equal(fixture.codex.runs[0]?.prompt, "你好");
   assert.ok(fixture.sentTexts.some((text) => text.includes("Codex 正在处理这条消息。")));
   assert.ok(fixture.sentTexts.some((text) => text.includes("Mock Codex 回复: 你好")));
+});
+
+test("BridgeRouteQueue clears chat approvals when app-server resolves request", async () => {
+  const fixture = routeQueueFixture({ codex: new ResolvedApprovalCodexAdapter() });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "需要审批"), target("route-a"), "需要审批");
+  await fixture.queue.waitForWorkers();
+
+  assert.equal(fixture.approvals.list("route-a").length, 0);
+  assert.ok(fixture.sentTexts.some((text) => text.includes("Codex 请求审批")));
+  assert.ok(fixture.sentTexts.some((text) => text.includes("done after external approval")));
+});
+
+test("BridgeRouteQueue delivers Codex notifications even when progress is suppressed", async () => {
+  const fixture = routeQueueFixture({
+    codex: new NotificationCodexAdapter({
+      text: "Codex 安全提示：完整安全原因必须推送",
+      kind: "security",
+      method: "guardianWarning",
+    }),
+    shouldDeliverProgress: false,
+  });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "安全通知"), target("route-a"), "安全通知");
+  await fixture.queue.waitForWorkers();
+
+  assert.ok(fixture.sentTexts.some((text) => text.includes("完整安全原因必须推送")));
+  assert.equal(fixture.sentTexts.some((text) => text.includes("普通进度不应发送")), false);
+});
+
+test("BridgeRouteQueue unbinds current route when Codex archives the thread", async () => {
+  const codex = new LifecycleNotificationCodexAdapter("archived");
+  const session = await codex.startSession({ routeKey: "route-a", cwd: "/repo" });
+  const state = new MemoryStateStore();
+  state.bindSession("route-a", session);
+  const fixture = routeQueueFixture({ codex, state });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "触发生命周期通知"), target("route-a"), "触发生命周期通知");
+  await fixture.queue.waitForWorkers();
+
+  assert.equal(fixture.state.getBinding("route-a"), undefined);
+  assert.equal(fixture.state.getSessionOwner(session.id), undefined);
+  assert.equal(fixture.state.getSession(session.id)?.status.type, "unknown");
+  assert.ok(fixture.sentTexts.some((text) => text.includes("已在 Codex 侧归档") && text.includes("/new") && text.includes("/resume")));
+});
+
+test("BridgeRouteQueue deduplicates repeated Codex notifications", async () => {
+  const fixture = routeQueueFixture({ codex: new DuplicateNotificationCodexAdapter() });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "重复通知"), target("route-a"), "重复通知");
+  await fixture.queue.waitForWorkers();
+
+  assert.equal(fixture.sentTexts.filter((text) => text.includes("Codex 配置警告：重复配置")).length, 1);
 });
 
 test("BridgeRouteQueue serializes same-route prompts and can clear queued work", async () => {
@@ -81,6 +135,40 @@ test("BridgeRouteQueue keeps persisted snapshot for refresh check when auto-resu
   assert.ok(fixture.sentTexts.some((text) => text.includes("已在发送前重新加载")));
 });
 
+test("BridgeRouteQueue replaces stale active bindings without raw Codex failures", async () => {
+  const staleSessionId = "01900000-0000-7000-8000-000000000000";
+  const fixture = routeQueueFixture({
+    codex: new MissingRolloutCodexAdapter(staleSessionId),
+    state: stateWithActiveBinding("route-a", staleSessionId),
+  });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "继续"), target("route-a"), "继续");
+  await fixture.queue.waitForWorkers();
+
+  assert.equal(fixture.codex.runs[0]?.prompt, "继续");
+  assert.notEqual(fixture.codex.runs[0]?.sessionId, staleSessionId);
+  assert.equal(fixture.state.getBinding("route-a")?.sessionId, fixture.codex.runs[0]?.sessionId);
+  assert.ok(fixture.sentTexts.some((text) => text.includes("已清理失效的 Codex 会话绑定")));
+  assert.equal(fixture.sentTexts.some((text) => text.includes("Codex 执行失败: no rollout found")), false);
+});
+
+test("BridgeRouteQueue asks after clearing stale active bindings when policy is ask", async () => {
+  const staleSessionId = "01900000-0000-7000-8000-000000000000";
+  const fixture = routeQueueFixture({
+    codex: new MissingRolloutCodexAdapter(staleSessionId),
+    state: stateWithActiveBinding("route-a", staleSessionId),
+    unboundRoutePolicy: "ask",
+  });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "继续"), target("route-a"), "继续");
+  await fixture.queue.waitForWorkers();
+
+  assert.equal(fixture.codex.runs.length, 0);
+  assert.equal(fixture.state.getBinding("route-a"), undefined);
+  assert.ok(fixture.sentTexts.some((text) => text.includes("请先发送 /new 创建新会话")));
+  assert.equal(fixture.sentTexts.some((text) => text.includes("Codex 执行失败: no rollout found")), false);
+});
+
 test("BridgeRouteQueue stops prompt when external update reload fails", async () => {
   const fixture = routeQueueFixture({ contextRefreshMode: "reload" });
   fixture.state.bindSession("route-a", {
@@ -98,7 +186,14 @@ test("BridgeRouteQueue stops prompt when external update reload fails", async ()
   assert.ok(fixture.sentTexts.some((text) => text.includes("本条消息没有发送")));
 });
 
-function routeQueueFixture(options: { codex?: MockCodexAdapter; state?: MemoryStateStore; contextRefreshMode?: "off" | "detect" | "reload" } = {}) {
+function routeQueueFixture(options: {
+  codex?: MockCodexAdapter;
+  state?: MemoryStateStore;
+  contextRefreshMode?: "off" | "detect" | "reload";
+  unboundRoutePolicy?: UnboundRoutePolicy;
+  deliveryPolicy?: ChannelDeliveryPolicy;
+  shouldDeliverProgress?: boolean;
+} = {}) {
   const codex = options.codex ?? new MockCodexAdapter();
   const state = options.state ?? new MemoryStateStore();
   const approvals = new ApprovalManager();
@@ -130,7 +225,7 @@ function routeQueueFixture(options: { codex?: MockCodexAdapter; state?: MemorySt
     state,
     delivery,
     cwd: "/repo",
-    unboundRoutePolicy: "auto_new",
+    unboundRoutePolicy: options.unboundRoutePolicy ?? "auto_new",
     isRouteExecutionBusy: async () => false,
     applyStoredSessionRunPolicy: () => undefined,
     collaborationModeForRoute: () => "default",
@@ -156,19 +251,118 @@ function routeQueueFixture(options: { codex?: MockCodexAdapter; state?: MemorySt
     sessionFlow,
     hasBackgroundTurnForRoute: () => false,
     currentCollaborationMode: () => undefined,
-    deliveryPolicyFor: () => DEFAULT_CHANNEL_DELIVERY_POLICY,
-    shouldDeliverProgressWithPolicy: () => true,
+    deliveryPolicyFor: () => options.deliveryPolicy ?? DEFAULT_CHANNEL_DELIVERY_POLICY,
+    shouldDeliverProgressWithPolicy: () => options.shouldDeliverProgress ?? true,
     contextRefresh,
   });
   return {
     codex,
     state,
+    approvals,
     queue,
     sentTexts,
     setFingerprint: (fingerprint: CodexSessionContextFingerprint | undefined) => {
       currentFingerprint = fingerprint;
     },
   };
+}
+
+class NotificationCodexAdapter extends MockCodexAdapter {
+  constructor(private readonly notification: Pick<Extract<CodexEvent, { type: "codex.notification" }>["notification"], "method" | "kind" | "text">) {
+    super();
+  }
+
+  override async *run(sessionId: string, _prompt: CodexPromptInput): AsyncIterable<CodexEvent> {
+    const turnId = "notification-turn";
+    yield { type: "turn.started", sessionId, turnId };
+    yield { type: "assistant.progress", sessionId, turnId, text: "普通进度不应发送", kind: "other" };
+    yield {
+      type: "codex.notification",
+      sessionId,
+      turnId,
+      notification: {
+        method: this.notification.method,
+        kind: this.notification.kind,
+        text: this.notification.text,
+        dedupeKey: `${this.notification.method}:${this.notification.text}`,
+        dedupeWindowMs: 10 * 60_000,
+      },
+    };
+    yield { type: "assistant.completed", sessionId, turnId, text: "done" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class LifecycleNotificationCodexAdapter extends MockCodexAdapter {
+  constructor(private readonly lifecycle: "archived" | "closed") {
+    super();
+  }
+
+  override async *run(sessionId: string, _prompt: CodexPromptInput): AsyncIterable<CodexEvent> {
+    const turnId = "lifecycle-turn";
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "codex.notification",
+      sessionId,
+      turnId,
+      notification: {
+        method: this.lifecycle === "archived" ? "thread/archived" : "thread/closed",
+        kind: "lifecycle",
+        text: `thread ${this.lifecycle}`,
+        dedupeKey: `thread/${this.lifecycle}:${sessionId}`,
+        dedupeWindowMs: 10 * 60_000,
+        lifecycle: this.lifecycle,
+        unbindRoute: true,
+      },
+    };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class DuplicateNotificationCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: CodexPromptInput): AsyncIterable<CodexEvent> {
+    const turnId = "duplicate-notification-turn";
+    const notification: Extract<CodexEvent, { type: "codex.notification" }> = {
+      type: "codex.notification",
+      sessionId,
+      turnId,
+      notification: {
+        method: "configWarning",
+        kind: "config",
+        text: "Codex 配置警告：重复配置",
+        dedupeKey: `configWarning:${sessionId}:重复配置`,
+        dedupeWindowMs: 30 * 60_000,
+      },
+    };
+    yield { type: "turn.started", sessionId, turnId };
+    yield notification;
+    yield notification;
+    yield { type: "assistant.completed", sessionId, turnId, text: "done" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class ResolvedApprovalCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: CodexPromptInput): AsyncIterable<CodexEvent> {
+    const turnId = "resolved-approval-turn";
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "approval.requested",
+      sessionId,
+      turnId,
+      approval: {
+        kind: "command",
+        adapterApprovalId: "approval-resolved",
+        sessionId,
+        turnId,
+        itemId: "cmd-1",
+        command: "touch done.txt",
+      },
+    };
+    yield { type: "approval.resolved", sessionId, turnId, adapterApprovalId: "approval-resolved" };
+    yield { type: "assistant.completed", sessionId, turnId, text: "done after external approval" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
 }
 
 class BlockingCodexAdapter extends MockCodexAdapter {
@@ -192,6 +386,27 @@ class BlockingCodexAdapter extends MockCodexAdapter {
   release(): void {
     this.releaseCurrent?.();
   }
+}
+
+class MissingRolloutCodexAdapter extends MockCodexAdapter {
+  constructor(private readonly missingSessionId: string) {
+    super();
+  }
+
+  override async resumeSession(sessionId: string) {
+    if (sessionId === this.missingSessionId) {
+      throw new Error(`no rollout found for thread id ${sessionId}`);
+    }
+    return await super.resumeSession(sessionId);
+  }
+}
+
+function stateWithActiveBinding(routeKey: string, sessionId: string): MemoryStateStore {
+  const timestamp = "2026-06-07T00:00:00.000Z";
+  return new MemoryStateStore(new SessionBindings({
+    active: [{ routeKey, sessionId, createdAt: timestamp, updatedAt: timestamp }],
+    owners: [{ sessionId, ownerRouteKey: routeKey, claimedAt: timestamp, updatedAt: timestamp }],
+  }));
 }
 
 function message(routeKey: string, text: string): ChannelMessage {

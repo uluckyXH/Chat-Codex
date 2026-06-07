@@ -78,6 +78,20 @@ export class ApprovalManager {
     return cancelled;
   }
 
+  resolveAdapterApproval(routeKey: string, adapterApprovalId: string, reason?: string): PendingApproval | undefined {
+    this.expireOld();
+    for (const pending of this.approvals.values()) {
+      if (pending.routeKey !== routeKey) continue;
+      if (pending.status !== "pending") continue;
+      if (pending.adapterApprovalId !== adapterApprovalId) continue;
+      pending.status = "resolved";
+      pending.decisionReason = reason?.trim() || undefined;
+      this.approvals.set(pending.approvalKey, pending);
+      return pending;
+    }
+    return undefined;
+  }
+
   formatForChannel(pending: PendingApproval): string {
     const lines = [
       "Codex 请求审批",

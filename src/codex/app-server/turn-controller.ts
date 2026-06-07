@@ -78,6 +78,16 @@ export class AppServerTurnController {
     this.earlyTurnEvents.set(turnId, early);
   }
 
+  pushTurnOrBackgroundEvent(event: CodexEvent): void {
+    const turn = this.turnQueues.get(event.turnId);
+    if (turn && !turn.closed) {
+      turn.queue.push(event);
+      return;
+    }
+    if (this.closedTurnIds.has(event.turnId) && event.type !== "codex.notification") return;
+    void this.emitBackgroundEvent(event);
+  }
+
   createBackgroundTurn(sessionId: string, turnId: string): TurnQueueRecord | undefined {
     if (this.closedTurnIds.has(turnId)) return undefined;
     const existing = this.turnQueues.get(turnId);

@@ -2,12 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ApprovalManager } from "../../src/approvals/approval-manager.js";
 import { BridgeDelivery } from "../../src/bridge/delivery.js";
-import { BridgeSessionFlow } from "../../src/bridge/session-flow.js";
+import { BridgeSessionFlow, StaleCodexSessionBindingError } from "../../src/bridge/session-flow.js";
+import type { UnboundRoutePolicy } from "../../src/bridge/bridge-types.js";
 import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
 import { SilentLogger } from "../../src/logging/logger.js";
 import type { ChannelRegistry } from "../../src/channels/registry.js";
 import type { ChannelMessage, ChannelTarget } from "../../src/protocol/channel.js";
 import { MemoryStateStore } from "../../src/state/memory-state-store.js";
+import { SessionBindings } from "../../src/state/session-bindings.js";
 
 test("BridgeSessionFlow creates new sessions in the startup cwd", async () => {
   const fixture = sessionFlowFixture({ cwd: "/repo" });
@@ -87,13 +89,45 @@ test("BridgeSessionFlow keeps initial existing binding scoped to the first direc
   assert.equal(fixture.state.getBinding("route-b")?.sessionId, otherSession.id);
 });
 
+test("BridgeSessionFlow clears stale active bindings and creates a replacement session", async () => {
+  const staleSessionId = "01900000-0000-7000-8000-000000000000";
+  const fixture = sessionFlowFixture({
+    codex: new MissingRolloutCodexAdapter(staleSessionId),
+    state: stateWithActiveBinding("route-a", staleSessionId),
+  });
+
+  const session = await fixture.flow.ensureSession(message("route-a"));
+
+  assert.notEqual(session.id, staleSessionId);
+  assert.equal(fixture.state.getBinding("route-a")?.sessionId, session.id);
+  assert.equal(fixture.state.getSessionOwner(staleSessionId), undefined);
+});
+
+test("BridgeSessionFlow clears stale active bindings and asks when unbound policy is ask", async () => {
+  const staleSessionId = "01900000-0000-7000-8000-000000000000";
+  const fixture = sessionFlowFixture({
+    codex: new MissingRolloutCodexAdapter(staleSessionId),
+    state: stateWithActiveBinding("route-a", staleSessionId),
+    unboundRoutePolicy: "ask",
+  });
+
+  await assert.rejects(
+    () => fixture.flow.ensureSession(message("route-a")),
+    StaleCodexSessionBindingError,
+  );
+  assert.equal(fixture.state.getBinding("route-a"), undefined);
+  assert.equal(fixture.state.getSessionOwner(staleSessionId), undefined);
+});
+
 function sessionFlowFixture(options: {
   cwd?: string;
   codex?: MockCodexAdapter;
+  state?: MemoryStateStore;
   initialRouteBinding?: { type: "existing"; sessionId: string } | { type: "new" };
+  unboundRoutePolicy?: UnboundRoutePolicy;
 } = {}) {
   const codex = options.codex ?? new MockCodexAdapter();
-  const state = new MemoryStateStore();
+  const state = options.state ?? new MemoryStateStore();
   const sentTexts: string[] = [];
   const delivery = new BridgeDelivery({
     channels: {
@@ -112,7 +146,7 @@ function sessionFlowFixture(options: {
     delivery,
     cwd: options.cwd ?? "/workspace",
     initialRouteBinding: options.initialRouteBinding,
-    unboundRoutePolicy: "auto_new",
+    unboundRoutePolicy: options.unboundRoutePolicy ?? "auto_new",
     isRouteExecutionBusy: async () => false,
     applyStoredSessionRunPolicy: () => undefined,
     collaborationModeForRoute: () => "default",
@@ -127,6 +161,27 @@ class FailingTitleCodexAdapter extends MockCodexAdapter {
   override async setSessionTitle(_sessionId: string, _title: string): Promise<void> {
     throw new Error("title sync failed");
   }
+}
+
+class MissingRolloutCodexAdapter extends MockCodexAdapter {
+  constructor(private readonly missingSessionId: string) {
+    super();
+  }
+
+  override async resumeSession(sessionId: string) {
+    if (sessionId === this.missingSessionId) {
+      throw new Error(`no rollout found for thread id ${sessionId}`);
+    }
+    return await super.resumeSession(sessionId);
+  }
+}
+
+function stateWithActiveBinding(routeKey: string, sessionId: string): MemoryStateStore {
+  const timestamp = "2026-06-07T00:00:00.000Z";
+  return new MemoryStateStore(new SessionBindings({
+    active: [{ routeKey, sessionId, createdAt: timestamp, updatedAt: timestamp }],
+    owners: [{ sessionId, ownerRouteKey: routeKey, claimedAt: timestamp, updatedAt: timestamp }],
+  }));
 }
 
 function message(routeKey: string): ChannelMessage {

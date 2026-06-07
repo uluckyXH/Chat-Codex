@@ -6,6 +6,7 @@ import type { BridgeDelivery } from "../delivery.js";
 import type { CompactState } from "../bridge-types.js";
 import { ROUTE_BUSY_MUTATION_REJECT_TEXT } from "../bridge-types.js";
 import { formatNumber, formatPercent } from "../formatters.js";
+import { isMissingCodexThreadError } from "../session-flow.js";
 
 export interface CompactCommandOptions {
   codex: CodexAdapter;
@@ -42,7 +43,17 @@ export async function handleCompactCommand(
 
   const confirm = isCompactConfirm(args);
   if (!confirm) {
-    const status = await options.codex.getStatus(binding.sessionId).catch(() => undefined);
+    let status: Awaited<ReturnType<CodexAdapter["getStatus"]>> | undefined;
+    try {
+      status = await options.codex.getStatus(binding.sessionId);
+    } catch (error) {
+      if (isMissingCodexThreadError(error)) {
+        options.state.unbindSession(message.routeKey);
+        await options.delivery.sendText(target, staleCompactBindingText(message.routeKey, binding.sessionId));
+        return;
+      }
+      status = undefined;
+    }
     options.setCompactState(message.routeKey, {
       type: "confirming",
       sessionId: binding.sessionId,
@@ -105,6 +116,11 @@ export async function handleCompactCommand(
       sessionId: binding.sessionId,
       error: messageText,
     });
+    if (isMissingCodexThreadError(error)) {
+      options.state.unbindSession(message.routeKey);
+      await options.delivery.sendText(target, staleCompactBindingText(message.routeKey, binding.sessionId));
+      return;
+    }
     await options.delivery.sendText(target, [
       `上下文压缩失败：${messageText}`,
       "",
@@ -114,6 +130,18 @@ export async function handleCompactCommand(
     options.clearCompactState(message.routeKey);
     await options.delivery.sendTyping(target, false);
   }
+}
+
+function staleCompactBindingText(routeKey: string, sessionId: string): string {
+  return [
+    "已清理失效的 Codex 会话绑定。",
+    `原 Session: ${sessionId}`,
+    "Codex 本地历史/rollout 不存在，无法压缩这个会话。",
+    "",
+    "当前聊天还没有绑定 Codex 会话。",
+    "请先发送 /new 创建新会话，或发送 /resume 进入会话选择。",
+    `Route: ${routeKey}`,
+  ].join("\n");
 }
 
 export function isCompactConfirm(args: string[]): boolean {

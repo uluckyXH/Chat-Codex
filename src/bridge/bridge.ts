@@ -33,6 +33,7 @@ import { BridgeCommandRouter } from "./command-router.js";
 import { SessionContextRefreshManager } from "./context-refresh.js";
 import { BridgeDelivery } from "./delivery.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
+import { BridgeNotificationDelivery } from "./notification-delivery.js";
 import { BridgeRouteQueue } from "./route-queue.js";
 import { BridgeRouteSteering } from "./route-steering.js";
 import { RouteTrustGate } from "./route-trust-gate.js";
@@ -92,6 +93,7 @@ export class Bridge {
   private readonly transcript?: TranscriptSink;
   private readonly delivery: BridgeDelivery;
   private readonly progressDelivery: BridgeProgressDelivery;
+  private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly routeTrustGate: RouteTrustGate;
   private readonly contextRefresh: SessionContextRefreshManager;
   private readonly backgroundTurns: BridgeBackgroundTurns;
@@ -162,6 +164,10 @@ export class Bridge {
       transcript: this.transcript,
       shouldDeliverProgress: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
     });
+    this.notificationDelivery = new BridgeNotificationDelivery({
+      state: this.state,
+      delivery: this.delivery,
+    });
     this.sessionFlow = new BridgeSessionFlow({
       codex: this.codex,
       state: this.state,
@@ -191,6 +197,7 @@ export class Bridge {
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
       progressDelivery: this.progressDelivery,
+      notificationDelivery: this.notificationDelivery,
       contextRefresh: this.contextRefresh,
     });
     this.backgroundTurns = new BridgeBackgroundTurns({
@@ -204,6 +211,7 @@ export class Bridge {
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
       progressDelivery: this.progressDelivery,
+      notificationDelivery: this.notificationDelivery,
       startRouteWorker: (routeKey) => this.routeQueue.startRouteWorker(routeKey),
       routeQueueLength: (routeKey) => this.routeQueue.queueLength(routeKey),
       hasRouteWorker: (routeKey) => this.routeQueue.hasWorker(routeKey),

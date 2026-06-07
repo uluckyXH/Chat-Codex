@@ -106,13 +106,38 @@ export type CodexSessionStatus = CodexSessionBaseStatus & {
   model?: CodexSessionModelInfo;
 };
 
+export type CodexNotificationKind =
+  | "security"
+  | "warning"
+  | "model"
+  | "config"
+  | "lifecycle"
+  | "deprecation";
+
+export type CodexThreadLifecycleNotification =
+  | "archived"
+  | "closed"
+  | "unarchived";
+
+export interface CodexNotification {
+  method: string;
+  kind: CodexNotificationKind;
+  text: string;
+  dedupeKey: string;
+  dedupeWindowMs: number;
+  lifecycle?: CodexThreadLifecycleNotification;
+  unbindRoute?: boolean;
+}
+
 export type CodexEvent =
   | { type: "turn.started"; sessionId: string; turnId: string; startedAt?: string }
   | { type: "assistant.progress"; sessionId: string; turnId: string; text: string; kind?: CodexProgressKind }
+  | { type: "codex.notification"; sessionId: string; turnId: string; notification: CodexNotification }
   | { type: "assistant.plan"; sessionId: string; turnId: string; text: string }
   | { type: "assistant.delta"; sessionId: string; turnId: string; text: string }
   | { type: "assistant.completed"; sessionId: string; turnId: string; text: string }
   | { type: "approval.requested"; sessionId: string; turnId: string; approval: ApprovalRequest }
+  | { type: "approval.resolved"; sessionId: string; turnId: string; adapterApprovalId: string }
   | { type: "turn.completed"; sessionId: string; turnId: string }
   | { type: "turn.failed"; sessionId: string; turnId: string; error: string };
 
