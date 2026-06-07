@@ -2009,7 +2009,7 @@ test("Bridge delivers request_user_input prompts on weixin even when progress is
   assert.ok(channel.sentMessages.some((message) => message.text.includes("/a0 跳过这个问题")));
 });
 
-test("Bridge only accepts group request_user_input answers from the task initiator", async () => {
+test("Bridge accepts the first group request_user_input answer and marks later answers stale", async () => {
   const channel = new MockChannelAdapter();
   const codex = new RequestUserInputCodexAdapter([choiceQuestion()]);
   const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
@@ -2018,12 +2018,13 @@ test("Bridge only accepts group request_user_input answers from the task initiat
   await channel.emitText("群聊需要选择", { conversationKind: "group", conversationId: "group-1", senderId: "alice" });
   await waitFor(() => channel.sentMessages.some((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续")));
   await channel.emitText("/a1", { conversationKind: "group", conversationId: "group-1", senderId: "bob" });
-  assert.equal(codex.resolvedInputs.length, 0);
   await channel.emitText("/a1", { conversationKind: "group", conversationId: "group-1", senderId: "alice" });
   await bridge.waitForIdle();
   await bridge.stop();
 
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("只接受本轮任务发起人回答")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("群聊中成员先回复者生效")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("当前回复已失效")));
+  assert.equal(codex.resolvedInputs.length, 1);
   assert.deepEqual(codex.resolvedInputs[0]?.response.answers.confirm_path.answers, ["Yes (Recommended)"]);
 });
 

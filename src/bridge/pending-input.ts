@@ -30,13 +30,16 @@ export interface HandlePendingInputMessageOptions {
 interface PendingInputState {
   routeKey: string;
   target: ChannelTarget;
-  initiatorSenderId: string;
   request: CodexUserInputRequest;
   currentQuestionIndex: number;
   answers: CodexUserInputResponse["answers"];
   expiresAt: number;
   timer?: ReturnType<typeof setTimeout>;
   resolving: boolean;
+}
+
+interface RecentlyResolvedInput {
+  expiresAt: number;
 }
 
 interface QueuedPendingInput {
@@ -61,6 +64,7 @@ interface AnswerChoice {
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const MAX_ANSWER_OPTIONS = 9;
 const OTHER_OPTION_LABEL = "None of the above";
+const RECENTLY_RESOLVED_TTL_MS = 60_000;
 
 export class BridgePendingInputManager {
   private readonly codex: CodexAdapter;
@@ -68,6 +72,7 @@ export class BridgePendingInputManager {
   private readonly timeoutMs: number;
   private readonly pendingByRoute = new Map<string, PendingInputState>();
   private readonly queuedByRoute = new Map<string, QueuedPendingInput[]>();
+  private readonly recentlyResolvedByRoute = new Map<string, RecentlyResolvedInput>();
 
   constructor(options: BridgePendingInputOptions) {
     this.codex = options.codex;
@@ -120,7 +125,6 @@ export class BridgePendingInputManager {
     const state: PendingInputState = {
       routeKey: input.routeKey,
       target: input.target,
-      initiatorSenderId: input.message.sender.id,
       request: input.request,
       currentQuestionIndex: 0,
       answers: {},
@@ -140,7 +144,9 @@ export class BridgePendingInputManager {
     const pending = this.pendingByRoute.get(input.message.routeKey);
     if (!pending) {
       if (command) {
-        await this.delivery.sendText(input.target, "当前没有等待回答的 Codex 问题。");
+        await this.delivery.sendText(input.target, this.recentlyResolved(input.message.routeKey)
+          ? "这个 Codex 输入请求已处理，当前回复已失效。"
+          : "当前没有等待回答的 Codex 问题。");
         return true;
       }
       return false;
@@ -149,10 +155,6 @@ export class BridgePendingInputManager {
     if (!command) {
       if (input.commandName) return false;
       await this.delivery.sendText(input.target, "Codex 正在等待你的选择。请按上一条提示回复 /a1、/a2，或 /a0 跳过这个问题；如需停止整个任务，请回复 /stop。");
-      return true;
-    }
-    if (input.message.conversation.kind === "group" && input.message.sender.id !== pending.initiatorSenderId) {
-      await this.delivery.sendText(input.target, "当前 Codex 输入请求只接受本轮任务发起人回答。");
       return true;
     }
     if (pending.resolving) {
@@ -197,6 +199,7 @@ export class BridgePendingInputManager {
       cleared += queued.length;
       this.queuedByRoute.delete(routeKey);
     }
+    this.recentlyResolvedByRoute.delete(routeKey);
     return cleared;
   }
 
@@ -206,6 +209,7 @@ export class BridgePendingInputManager {
     }
     this.pendingByRoute.clear();
     this.queuedByRoute.clear();
+    this.recentlyResolvedByRoute.clear();
   }
 
   private async applyAnswer(pending: PendingInputState, command: AnswerCommand): Promise<void> {
@@ -259,8 +263,9 @@ export class BridgePendingInputManager {
     pending.resolving = true;
     const routeKey = pending.routeKey;
     const response = responseWithEmptyAnswers(pending.request, pending.answers);
-    this.clearPending(pending);
     await this.codex.resolveUserInput?.(pending.request.adapterRequestId, response);
+    this.clearPending(pending);
+    this.markRecentlyResolved(routeKey);
     await this.delivery.sendText(pending.target, "已提交 Codex 输入。");
     await this.startNextQueued(routeKey);
   }
@@ -270,6 +275,7 @@ export class BridgePendingInputManager {
     if (!pending || pending.request.adapterRequestId !== requestId) return;
     const response = responseWithEmptyAnswers(pending.request, pending.answers);
     this.clearPending(pending);
+    this.markRecentlyResolved(routeKey);
     await this.codex.resolveUserInput?.(pending.request.adapterRequestId, response);
     await this.delivery.sendText(pending.target, [
       "Codex 等待选择已超时，Chat-Codex 已按“未回答”处理。",
@@ -301,6 +307,18 @@ export class BridgePendingInputManager {
   private clearPending(pending: PendingInputState): void {
     if (pending.timer) clearTimeout(pending.timer);
     this.pendingByRoute.delete(pending.routeKey);
+  }
+
+  private markRecentlyResolved(routeKey: string): void {
+    this.recentlyResolvedByRoute.set(routeKey, { expiresAt: Date.now() + RECENTLY_RESOLVED_TTL_MS });
+  }
+
+  private recentlyResolved(routeKey: string): boolean {
+    const resolved = this.recentlyResolvedByRoute.get(routeKey);
+    if (!resolved) return false;
+    if (resolved.expiresAt > Date.now()) return true;
+    this.recentlyResolvedByRoute.delete(routeKey);
+    return false;
   }
 }
 
@@ -365,10 +383,18 @@ function formatQuestionPrompt(pending: PendingInputState): string {
   const lines = [
     "Codex 暂停了当前任务，需要你确认后继续。",
     "",
+  ];
+  if (pending.target.conversation.kind === "group") {
+    lines.push(
+      "群聊中成员先回复者生效；飞书群聊请 @机器人 回复命令。",
+      "",
+    );
+  }
+  lines.push(
     `问题 ${pending.currentQuestionIndex + 1}/${questionCount}${question.header ? `：${question.header}` : ""}`,
     question.question,
     "",
-  ];
+  );
   if (choices.length > 0) {
     lines.push("直接回复下面一条命令：", "");
     for (const [index, choice] of choices.entries()) {
