@@ -13,7 +13,7 @@
       "license": "MIT",
       "dependencies": {
         "@inkjs/ui": "^2.0.0",
-        "@larksuiteoapi/node-sdk": "^1.64.0",
+        "@larksuiteoapi/node-sdk": "^1.66.1",
         "ink": "^7.0.3",
         "qrcode-terminal": "^0.12.0",
         "react": "^19.2.6"
@@ -63,9 +63,9 @@
       }
     },
     "node_modules/@larksuiteoapi/node-sdk": {
-      "version": "1.64.0",
-      "resolved": "https://registry.npmjs.org/@larksuiteoapi/node-sdk/-/node-sdk-1.64.0.tgz",
-      "integrity": "sha512-r3ae0lAi3ipH1g1geUo1fmb7DK5e0WAKrrrDi25yJCKBvxtiKLsR3ldss3OZnqyfP7yGHkjeN0BYuzyaWgxFoA==",
+      "version": "1.66.1",
+      "resolved": "https://registry.npmjs.org/@larksuiteoapi/node-sdk/-/node-sdk-1.66.1.tgz",
+      "integrity": "sha512-W1rIAs/8Oc/rEYuWc0sxGvR8iLwd8p5D2RS4ODMqs8htIxK8yIa8sb22EDv/OEBqUpKXZaNLydTz7Oq8HOQROg==",
       "inBundle": true,
       "license": "MIT",
       "dependencies": {
@@ -244,9 +244,9 @@
       }
     },
     "node_modules/axios": {
-      "version": "1.16.1",
-      "resolved": "https://registry.npmjs.org/axios/-/axios-1.16.1.tgz",
-      "integrity": "sha512-caYkukvroVPO8KrzuJEb50Hm07KwfBZPEC3VeFHTsqWHvKTsy54hjJz9BS/cdaypROE2rH6xvm9mHX4fgWkr3A==",
+      "version": "1.17.0",
+      "resolved": "https://registry.npmjs.org/axios/-/axios-1.17.0.tgz",
+      "integrity": "sha512-J8SwNxprqqpbfenehxWYXE7CW+wM1BB4w3+N+g+/Wx40xM4rsLrfPmHHxSWIxJLYDgSY/HqlFPIYb2/S3rxafw==",
       "inBundle": true,
       "license": "MIT",
       "dependencies": {

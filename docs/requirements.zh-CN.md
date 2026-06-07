@@ -54,8 +54,8 @@ Codex <-> Codex Adapter <-> Middleware Core <-> Weixin Adapter <-> WeChat
 
 `openclaw-weixin` 微信通讯 npm 包作为本地参考源码使用，不提交到仓库。获取方式见 `references/README.md`：
 
-- `openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.3.tgz`
-- `openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3/`
+- `openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.4.tgz`
+- `openclaw-weixin-npm/extracted/openclaw-weixin-2.4.4/`
 
 Codex 源码参考仓库只在需要核对 app-server、exec JSONL 或审批协议时按 `references/README.md` 拉取，不提交：
 
@@ -99,7 +99,7 @@ Git 管理要求：
 
 ### 3.0 可演进适配要求
 
-`openclaw-weixin` 插件后续会继续更新，项目设计必须预留适配口，不能把业务逻辑强绑定到当前 `2.4.3` 包的内部文件结构。
+`openclaw-weixin` 插件后续会继续更新，项目设计必须预留适配口，不能把业务逻辑强绑定到当前 `2.4.4` 包的内部文件结构。
 
 基本要求：
 

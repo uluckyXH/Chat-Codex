@@ -7,7 +7,7 @@ import { WeixinAdapter } from "../../src/channels/weixin/weixin-adapter.js";
 
 test("WeixinAdapter shell implements channel contract and reports login_required", async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-adapter-shell-"));
-  const adapter = new WeixinAdapter({ sourceVersion: "2.4.3", stateDir });
+  const adapter = new WeixinAdapter({ sourceVersion: "2.4.4", stateDir });
   await adapter.start();
 
   assert.equal(adapter.id, "weixin");

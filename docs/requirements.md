@@ -12,8 +12,8 @@ This document captures requirements only. Implementation should not start until 
 
 The OpenClaw Weixin npm package is used only as a local reference source. Recreate it from the instructions in `references/README.md`; do not commit the downloaded package or extracted source:
 
-- `openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.3.tgz`
-- `openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3/`
+- `openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.4.tgz`
+- `openclaw-weixin-npm/extracted/openclaw-weixin-2.4.4/`
 
 ## 3. Core Requirements
 

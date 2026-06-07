@@ -27,10 +27,10 @@
 
 ## 2. 已知依据
 
-微信通道参考 `@tencent-weixin/openclaw-weixin@2.4.3` npm 包。该包通过 `references/README.md` 中的命令按需下载和解包，不提交到仓库：
+微信通道参考 `@tencent-weixin/openclaw-weixin@2.4.4` npm 包。该包通过 `references/README.md` 中的命令按需下载和解包，不提交到仓库：
 
-- `openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.3.tgz`
-- `openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3/`
+- `openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.4.tgz`
+- `openclaw-weixin-npm/extracted/openclaw-weixin-2.4.4/`
 
 从本地包可见：
 
@@ -253,8 +253,8 @@ WeixinAdapter implements ChannelAdapter
 当前实现说明：
 
 - 不 import `openclaw/plugin-sdk`，避免重新引入 OpenClaw runtime。
-- 参考 `openclaw-weixin@2.4.3` 的 HTTP JSON API，直接实现 `get_bot_qrcode`、`get_qrcode_status`、`getupdates`、`sendmessage`、`notifystart`、`notifystop` 的薄客户端。
-- 图片和普通文件发送参考 `openclaw-weixin@2.4.3` 的媒体链路：`getuploadurl` 申请上传参数，本地文件用 AES-128-ECB 加密后上传 CDN，再通过 `sendmessage` 发送 `image_item` 或 `file_item`。远程媒体 URL 会先下载到本地临时文件再走同一链路。
+- 参考 `openclaw-weixin@2.4.4` 的 HTTP JSON API，直接实现 `get_bot_qrcode`、`get_qrcode_status`、`getupdates`、`sendmessage`、`notifystart`、`notifystop` 的薄客户端。
+- 图片和普通文件发送参考 `openclaw-weixin@2.4.4` 的媒体链路：`getuploadurl` 申请上传参数，本地文件用 AES-128-ECB 加密后上传 CDN，再通过 `sendmessage` 发送 `image_item` 或 `file_item`。远程媒体 URL 会先下载到本地临时文件再走同一链路。
 - 登录轮询支持 `need_verifycode` 分支；CLI 会提示输入手机微信显示的配对数字后继续轮询。
 - 登录 token 默认保存在用户状态目录 `~/.chat-codex/state/channels/weixin/...`，不写入项目目录或 Git 跟踪文件。
 - 账号 ID 会做文件名安全归一化，例如 `abc@im.bot` 归一化为 `abc-im-bot`。
@@ -541,7 +541,7 @@ chat-codex test
 
 ### 4.1 版本边界
 
-当前本地包是 `2.4.3`，但设计上应保存：
+当前本地包是 `2.4.4`，但设计上应保存：
 
 - `installedVersion`
 - `resolvedDistTag`

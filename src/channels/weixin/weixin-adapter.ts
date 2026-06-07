@@ -134,7 +134,7 @@ export class WeixinAdapter implements ChannelAdapter {
 
   constructor(private readonly options: WeixinAdapterOptions = {}) {
     this.id = options.id ?? "weixin";
-    this.sourceVersion = options.sourceVersion ?? "2.4.3";
+    this.sourceVersion = options.sourceVersion ?? "2.4.4";
     this.botType = options.botType ?? DEFAULT_BOT_TYPE;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.cdnBaseUrl = options.cdnBaseUrl ?? DEFAULT_WEIXIN_CDN_BASE_URL;

@@ -32,7 +32,7 @@ export class WeixinApiClient {
   constructor(options: WeixinApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://ilinkai.weixin.qq.com";
     this.fetchImpl = options.fetch ?? fetch;
-    this.channelVersion = options.channelVersion ?? "2.4.3";
+    this.channelVersion = options.channelVersion ?? "2.4.4";
     this.botAgent = options.botAgent ?? "CodexWeChatMiddleware/0.1.0";
     this.appId = options.appId ?? "bot";
   }

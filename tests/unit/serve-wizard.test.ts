@@ -216,7 +216,7 @@ test("serve wizard formats capabilities and status details without raw JSON keys
     lastInboundAt: "2026-05-16T01:02:03.000Z",
     details: {
       source: "@tencent-weixin/openclaw-weixin",
-      sourceVersion: "2.4.3",
+      sourceVersion: "2.4.4",
       phase: "account-loaded",
       outboundMinIntervalMs: 1200,
       outboundMaxRetries: 2,
