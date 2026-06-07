@@ -27,6 +27,7 @@ export interface BridgeOptions {
   unboundRoutePolicy?: UnboundRoutePolicy;
   progressMode?: ProgressDeliveryMode;
   approvalSendRetryDelayMs?: number;
+  requestUserInputTimeoutMs?: number;
   steerDebounceMs?: number;
   steerBatchMaxMessages?: number;
   steerBatchMaxChars?: number;

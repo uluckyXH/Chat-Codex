@@ -129,6 +129,37 @@ export interface CodexNotification {
   unbindRoute?: boolean;
 }
 
+export interface CodexUserInputOption {
+  label: string;
+  description?: string;
+}
+
+export interface CodexUserInputQuestion {
+  id: string;
+  header?: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: CodexUserInputOption[];
+}
+
+export interface CodexUserInputRequest {
+  adapterRequestId: string;
+  sessionId: string;
+  turnId: string;
+  itemId?: string;
+  questions: CodexUserInputQuestion[];
+  raw?: unknown;
+}
+
+export interface CodexUserInputAnswer {
+  answers: string[];
+}
+
+export interface CodexUserInputResponse {
+  answers: Record<string, CodexUserInputAnswer>;
+}
+
 export type CodexEvent =
   | { type: "turn.started"; sessionId: string; turnId: string; startedAt?: string }
   | { type: "assistant.progress"; sessionId: string; turnId: string; text: string; kind?: CodexProgressKind }
@@ -138,6 +169,8 @@ export type CodexEvent =
   | { type: "assistant.completed"; sessionId: string; turnId: string; text: string }
   | { type: "approval.requested"; sessionId: string; turnId: string; approval: ApprovalRequest }
   | { type: "approval.resolved"; sessionId: string; turnId: string; adapterApprovalId: string }
+  | { type: "input.requested"; sessionId: string; turnId: string; request: CodexUserInputRequest }
+  | { type: "input.resolved"; sessionId: string; turnId: string; adapterRequestId: string }
   | { type: "turn.completed"; sessionId: string; turnId: string }
   | { type: "turn.failed"; sessionId: string; turnId: string; error: string };
 
@@ -193,6 +226,7 @@ export interface CodexAdapter {
   getStatus(sessionId: string): Promise<CodexSessionStatus>;
   listSessions(routeKey?: string): Promise<CodexSessionSummary[]>;
   resolveApproval?(approvalKey: string, decision: ApprovalDecision): Promise<void>;
+  resolveUserInput?(requestId: string, response: CodexUserInputResponse): Promise<void>;
   getRunPolicy?(sessionId?: string): CodexRunPolicy;
   setRunPolicy?(policy: CodexRunPolicy, sessionId?: string): void;
   getRunPolicyStatus?(sessionId?: string): CodexRunPolicyStatus;

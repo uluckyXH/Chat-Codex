@@ -1,4 +1,4 @@
-import type { CodexProgressKind } from "../types.js";
+import type { CodexProgressKind, CodexUserInputRequest } from "../types.js";
 import { arrayValue, objectValue, stringValue } from "./value-parsers.js";
 
 export interface ServerRequestContext {
@@ -33,16 +33,6 @@ export function unsupportedServerRequestResponse(
   params: Record<string, unknown>,
 ): UnsupportedServerRequestResponse {
   const context = contextFromServerRequestParams(params);
-  if (method === "item/tool/requestUserInput") {
-    return {
-      error: unsupportedError("Codex 请求了额外用户输入，但 Chat-Codex 当前尚未支持该交互。"),
-      notice: {
-        ...context,
-        text: requestUserInputNotice(params),
-        kind: "tool",
-      },
-    };
-  }
   if (method === "mcpServer/elicitation/request") {
     return {
       result: { action: "cancel", content: null, _meta: null },
@@ -99,20 +89,52 @@ export function unsupportedServerRequestResponse(
   };
 }
 
-function unsupportedError(message: string): { code: number; message: string } {
-  return { code: UNSUPPORTED_CODE, message };
-}
-
-function requestUserInputNotice(params: Record<string, unknown>): string {
+export function userInputRequestFromServerRequest(
+  requestId: string | number,
+  params: Record<string, unknown>,
+  sessionId: string,
+): CodexUserInputRequest | undefined {
+  const turnId = stringValue(params.turnId);
+  if (!sessionId || !turnId) return undefined;
   const questions = arrayValue(params.questions)
     .map((entry) => objectValue(entry))
-    .map((question) => stringValue(question.header) ?? stringValue(question.question))
-    .filter((value): value is string => Boolean(value));
-  const suffix = questions.length > 0 ? `问题：${questions.slice(0, 3).join("；")}` : undefined;
-  return [
-    "Codex 请求额外用户输入，但当前 Chat-Codex 尚未支持该交互；本次请求已拒绝。",
-    suffix,
-  ].filter(Boolean).join("\n");
+    .map((question, index) => {
+      const id = stringValue(question.id) ?? `question_${index + 1}`;
+      const header = stringValue(question.header);
+      const text = stringValue(question.question) ?? header ?? `问题 ${index + 1}`;
+      const options = arrayValue(question.options)
+        .map((option) => objectValue(option))
+        .map((option) => {
+          const label = stringValue(option.label);
+          if (!label) return undefined;
+          return {
+            label,
+            ...(stringValue(option.description) ? { description: stringValue(option.description) } : {}),
+          };
+        })
+        .filter((option): option is { label: string; description?: string } => Boolean(option));
+      return {
+        id,
+        ...(header ? { header } : {}),
+        question: text,
+        isOther: question.isOther === true,
+        isSecret: question.isSecret === true,
+        options,
+      };
+    });
+  if (questions.length === 0) return undefined;
+  return {
+    adapterRequestId: String(requestId),
+    sessionId,
+    turnId,
+    ...(stringValue(params.itemId) ? { itemId: stringValue(params.itemId) } : {}),
+    questions,
+    raw: params,
+  };
+}
+
+function unsupportedError(message: string): { code: number; message: string } {
+  return { code: UNSUPPORTED_CODE, message };
 }
 
 function mcpElicitationNotice(params: Record<string, unknown>): string {

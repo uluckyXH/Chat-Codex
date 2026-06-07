@@ -6,7 +6,7 @@ import { MockChannelAdapter } from "../../src/channels/mock/mock-channel-adapter
 import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
 import { truncateDisplayText } from "../../src/codex/codex-cli.js";
 import { codexInputPlainText, normalizeCodexInput } from "../../src/codex/input.js";
-import type { CodexAdapter, CodexBackgroundEventHandler, CodexCollaborationMode, CodexCompactResult, CodexEvent, CodexGoal, CodexPromptInput, CodexRunOptions, CodexSession, CodexSessionContextUsage, CodexSessionStatus, CodexSessionSummary, CodexTurnInput, StartSessionInput } from "../../src/codex/types.js";
+import type { CodexAdapter, CodexBackgroundEventHandler, CodexCollaborationMode, CodexCompactResult, CodexEvent, CodexGoal, CodexPromptInput, CodexRunOptions, CodexSession, CodexSessionContextUsage, CodexSessionStatus, CodexSessionSummary, CodexTurnInput, CodexUserInputQuestion, CodexUserInputResponse, StartSessionInput } from "../../src/codex/types.js";
 import type { TranscriptSink } from "../../src/logging/transcript.js";
 import type { ChannelAttachment, ChannelCapabilities, ChannelMedia, ChannelMessage, ChannelTarget, SendResult } from "../../src/protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../../src/protocol/delivery-policy.js";
@@ -253,6 +253,48 @@ class PlanFinalCodexAdapter extends MockCodexAdapter {
     yield { type: "assistant.progress", sessionId, turnId, kind: "todo", text: "计划更新: 这条进度不应该在微信里发送。" };
     yield { type: "assistant.plan", sessionId, turnId, text: "# 执行计划\n- 先检查\n- 再实现" };
     yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class RequestUserInputCodexAdapter extends MockCodexAdapter {
+  readonly resolvedInputs: Array<{ requestId: string; response: CodexUserInputResponse }> = [];
+  private readonly resolvers = new Map<string, (response: CodexUserInputResponse) => void>();
+
+  constructor(private readonly questions: CodexUserInputQuestion[]) {
+    super();
+  }
+
+  override async *run(sessionId: string, _prompt: string, _options: CodexRunOptions = {}): AsyncIterable<CodexEvent> {
+    const turnId = `input-turn-${Date.now()}`;
+    const requestId = `input-request-${this.resolvedInputs.length + 1}`;
+    const responsePromise = new Promise<CodexUserInputResponse>((resolve) => {
+      this.resolvers.set(requestId, resolve);
+    });
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "input.requested",
+      sessionId,
+      turnId,
+      request: {
+        adapterRequestId: requestId,
+        sessionId,
+        turnId,
+        itemId: "input-item-1",
+        questions: this.questions,
+      },
+    };
+    const response = await responsePromise;
+    const first = Object.values(response.answers)[0]?.answers.join("|") ?? "";
+    yield { type: "assistant.completed", sessionId, turnId, text: `input result ${first}` };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+
+  async resolveUserInput(requestId: string, response: CodexUserInputResponse): Promise<void> {
+    this.resolvedInputs.push({ requestId, response });
+    const resolve = this.resolvers.get(requestId);
+    if (!resolve) throw new Error(`unknown input request: ${requestId}`);
+    this.resolvers.delete(requestId);
+    resolve(response);
   }
 }
 
@@ -1848,6 +1890,242 @@ test("Bridge stops retrying approval notification after approval is resolved", a
   assert.equal(codex.resolvedApprovals[0].decision, "approve");
 });
 
+test("Bridge answers request_user_input with /a commands", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([choiceQuestion()]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("需要中途选择");
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续")));
+  await channel.emitText("这不是答案");
+  await channel.emitText("/a2 先别改配置文件");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  const prompt = channel.sentMessages.find((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续"))?.text ?? "";
+  assert.ok(prompt.includes("直接回复下面一条命令"));
+  assert.ok(prompt.includes("/a1 Yes (Recommended)"));
+  assert.ok(prompt.includes("/a2 No"));
+  assert.ok(prompt.includes("/a3 其他：你的建议"));
+  assert.equal(prompt.includes("1. Yes"), false);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("/a0 跳过这个问题")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("Codex 会自己决定下一步")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("正在等待你的选择")));
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.confirm_path.answers, [
+    "No",
+    "user_note: 先别改配置文件",
+  ]);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("input result No|user_note: 先别改配置文件")));
+});
+
+test("Bridge treats /a0 as unanswered instead of stopping the turn", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([choiceQuestion()]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("需要跳过");
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续")));
+  await channel.emitText("/a0");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.confirm_path.answers, []);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("input result")));
+});
+
+test("Bridge answers request_user_input freeform questions with /a1 text", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([{
+    id: "custom_suggestion",
+    header: "补充建议",
+    question: "你希望 Codex 怎么处理？",
+    isOther: false,
+    isSecret: false,
+    options: [],
+  }]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("需要文字回答");
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("这个问题没有预设选项")));
+  await channel.emitText("/a1 先只改测试，不动生产逻辑");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.custom_suggestion.answers, [
+    "user_note: 先只改测试，不动生产逻辑",
+  ]);
+});
+
+test("Bridge handles multi-question request_user_input sequentially", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([
+    choiceQuestion(),
+    {
+      id: "follow_up",
+      header: "补充说明",
+      question: "还需要额外限制吗？",
+      isOther: false,
+      isSecret: false,
+      options: [
+        { label: "No", description: "没有额外限制。" },
+        { label: "Yes", description: "需要额外限制。" },
+      ],
+    },
+  ]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("需要连续回答");
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("问题 1/2")));
+  await channel.emitText("/a1");
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("问题 2/2")));
+  await channel.emitText("/a2 只能小范围修改");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.confirm_path.answers, ["Yes (Recommended)"]);
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.follow_up.answers, [
+    "Yes",
+    "user_note: 只能小范围修改",
+  ]);
+});
+
+test("Bridge delivers request_user_input prompts on weixin even when progress is suppressed", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([choiceQuestion()]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("微信也要提示");
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续")));
+  await channel.emitText("/a1");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.confirm_path.answers, ["Yes (Recommended)"]);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("/a0 跳过这个问题")));
+});
+
+test("Bridge only accepts group request_user_input answers from the task initiator", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([choiceQuestion()]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("群聊需要选择", { conversationKind: "group", conversationId: "group-1", senderId: "alice" });
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续")));
+  await channel.emitText("/a1", { conversationKind: "group", conversationId: "group-1", senderId: "bob" });
+  assert.equal(codex.resolvedInputs.length, 0);
+  await channel.emitText("/a1", { conversationKind: "group", conversationId: "group-1", senderId: "alice" });
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("只接受本轮任务发起人回答")));
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.confirm_path.answers, ["Yes (Recommended)"]);
+});
+
+test("Bridge times out request_user_input as unanswered", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([choiceQuestion()]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), requestUserInputTimeoutMs: 20 });
+
+  await bridge.start();
+  await channel.emitText("等待超时");
+  await waitFor(() => codex.resolvedInputs.length === 1, 1000);
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.confirm_path.answers, []);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("等待选择已超时")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("Codex 会自己决定下一步")));
+});
+
+test("Bridge auto-cancels MCP approval compatibility request_user_input", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([{
+    id: "mcp_tool_call_approval_1",
+    header: "Approve app tool call?",
+    question: "Allow private app tool?",
+    isOther: false,
+    isSecret: false,
+    options: [
+      { label: "Allow", description: "Allow tool call." },
+      { label: "Cancel", description: "Do not allow." },
+    ],
+  }]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("触发 MCP 兼容路径");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.mcp_tool_call_approval_1.answers, []);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("不支持 MCP/app tool 授权")));
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续")), false);
+});
+
+test("Bridge does not auto-cancel ordinary allow cancel request_user_input choices", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([{
+    id: "confirm_operation",
+    header: "确认操作",
+    question: "是否允许继续这个普通方案？",
+    isOther: false,
+    isSecret: false,
+    options: [
+      { label: "Allow", description: "继续普通方案。" },
+      { label: "Cancel", description: "跳过这个普通方案。" },
+    ],
+  }]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("普通 allow cancel");
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续")));
+  await channel.emitText("/a1");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.confirm_operation.answers, ["Allow"]);
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("不支持 MCP/app tool 授权")), false);
+});
+
+test("Bridge does not add duplicate synthetic other choice when option already asks for suggestions", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new RequestUserInputCodexAdapter([{
+    id: "debug_choice",
+    header: "测试选择",
+    question: "请选择一个结果。",
+    isOther: true,
+    isSecret: false,
+    options: [
+      { label: "通过 (Recommended)", description: "确认微信里回答能正常回到 Codex。" },
+      { label: "暂不通过", description: "确认补充说明能正常回传。" },
+      { label: "其他建议", description: "确认自定义补充文本能正常回传。" },
+    ],
+  }]);
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("已有其他建议");
+  await waitFor(() => channel.sentMessages.some((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续")));
+  const prompt = channel.sentMessages.find((message) => message.text.includes("Codex 暂停了当前任务，需要你确认后继续"))?.text ?? "";
+  await channel.emitText("/a3 我感觉展示还可以再简化");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.ok(prompt.includes("/a3 其他建议：你的建议"));
+  assert.equal(prompt.includes("/a4"), false);
+  assert.deepEqual(codex.resolvedInputs[0]?.response.answers.debug_choice.answers, [
+    "其他建议",
+    "user_note: 我感觉展示还可以再简化",
+  ]);
+});
+
 test("Bridge emits transcript events for inbound channel text and outbound replies", async () => {
   const channel = new MockChannelAdapter();
   const codex = new MockCodexAdapter();
@@ -2499,6 +2777,20 @@ function escapeRegExp(value: string): string {
 
 function tempStateRoot(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function choiceQuestion(): CodexUserInputQuestion {
+  return {
+    id: "confirm_path",
+    header: "确认方案",
+    question: "是否继续执行这个方案？",
+    isOther: true,
+    isSecret: false,
+    options: [
+      { label: "Yes (Recommended)", description: "继续当前方案。" },
+      { label: "No", description: "停止并重新考虑。" },
+    ],
+  };
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 1000): Promise<void> {

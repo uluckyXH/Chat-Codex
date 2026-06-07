@@ -9,7 +9,7 @@ import { modelInfoFromResponse, modelInfoWithPolicy, modelsFromListResponse, par
 import { appServerErrorMessage, isTransientAppServerError, messagePhaseValue, progressFromThreadItem, shouldFlushProgressDraft, textFromPlan } from "../../src/codex/app-server/notification-mapper.js";
 import { APP_SERVER_PROTOCOL_CAPABILITIES, type AppServerProtocolDirection } from "../../src/codex/app-server/protocol-capabilities.js";
 import { approvalPolicyForRunPolicy, approvalsReviewerForRunPolicy, cloneRunPolicy, sandboxModeForRunPolicy, sandboxPolicyForRunPolicy } from "../../src/codex/app-server/run-policy.js";
-import { contextFromServerRequestParams, unsupportedServerRequestResponse } from "../../src/codex/app-server/server-request-mapper.js";
+import { contextFromServerRequestParams, unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "../../src/codex/app-server/server-request-mapper.js";
 import { collaborationModePayload, truncatePrompt, withContext, withModelPolicy } from "../../src/codex/app-server/session-status.js";
 import { AsyncEventQueue, createTurnQueueRecord, shouldCreateBackgroundTurn } from "../../src/codex/app-server/turn-store.js";
 import { arrayValue, isoFromSeconds, numberValue, objectValue, objectValueOrNull, stringValue } from "../../src/codex/app-server/value-parsers.js";
@@ -102,13 +102,14 @@ test("app-server unsupported server request mapper fails closed with visible not
     itemId: "item-1",
   });
 
-  const input = unsupportedServerRequestResponse("item/tool/requestUserInput", {
+  const input = userInputRequestFromServerRequest("input-1", {
     threadId: "thread-1",
     turnId: "turn-1",
     questions: [{ id: "q1", header: "确认路径", question: "是否继续？" }],
-  });
-  assert.equal(input.error?.code, -32000);
-  assert.match(input.notice?.text ?? "", /额外用户输入/);
+  }, "thread-1");
+  assert.equal(input?.adapterRequestId, "input-1");
+  assert.equal(input?.questions[0]?.id, "q1");
+  assert.equal(input?.questions[0]?.question, "是否继续？");
 
   const elicitation = unsupportedServerRequestResponse("mcpServer/elicitation/request", {
     threadId: "thread-1",

@@ -289,8 +289,8 @@ rl.on("line", (line) => {
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
       return;
     }
-    if (prompt.includes("request user input unsupported")) {
-      send({ method: "item/tool/requestUserInput", id: "input-1", params: { threadId, turnId, itemId: "input-item-1", questions: [{ id: "confirm_path", header: "确认路径", question: "是否继续？", isOther: false, isSecret: false, options: null }] } });
+    if (prompt.includes("request user input supported")) {
+      send({ method: "item/tool/requestUserInput", id: "input-1", params: { threadId, turnId, itemId: "input-item-1", questions: [{ id: "confirm_path", header: "确认路径", question: "是否继续？", isOther: true, isSecret: false, options: [{ label: "Yes (Recommended)", description: "继续当前方案。" }, { label: "No", description: "停止并重新考虑。" }] }] } });
       return;
     }
     if (prompt.includes("mcp elicitation unsupported")) {
@@ -344,7 +344,8 @@ rl.on("line", (line) => {
     return;
   }
   if (message.id === "input-1") {
-    send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "input fallback " + (message.error?.message || "ok"), phase: null, memoryCitation: null } } });
+    const answers = message.result?.answers?.confirm_path?.answers || [];
+    send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "input answer " + answers.join("|"), phase: null, memoryCitation: null } } });
     send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
     return;
   }
@@ -413,7 +414,7 @@ test("AppServerCodexAdapter routes command approvals through resolveApproval", a
   assert.ok(events.some((event) => event.type === "turn.completed"));
 });
 
-test("AppServerCodexAdapter rejects unsupported request_user_input visibly", async () => {
+test("AppServerCodexAdapter resolves request_user_input through bridge answers", async () => {
   const root = tempDir();
   const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
   const session = await adapter.startSession({
@@ -423,13 +424,25 @@ test("AppServerCodexAdapter rejects unsupported request_user_input visibly", asy
   });
   const events: CodexEvent[] = [];
 
-  for await (const event of adapter.run(session.id, "request user input unsupported")) {
+  for await (const event of adapter.run(session.id, "request user input supported")) {
     events.push(event);
+    if (event.type === "input.requested") {
+      assert.equal(event.request.adapterRequestId, "input-1");
+      assert.equal(event.request.questions[0]?.id, "confirm_path");
+      assert.equal(event.request.questions[0]?.options[1]?.label, "No");
+      await adapter.resolveUserInput(event.request.adapterRequestId, {
+        answers: {
+          confirm_path: { answers: ["No", "user_note: 先别继续"] },
+        },
+      });
+    }
   }
   await adapter.stop();
 
-  assert.ok(events.some((event) => event.type === "assistant.progress" && event.text.includes("额外用户输入")));
-  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text.includes("Chat-Codex 当前尚未支持")));
+  assert.ok(events.some((event) => event.type === "input.requested"));
+  assert.ok(events.some((event) => event.type === "input.resolved" && event.adapterRequestId === "input-1"));
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "input answer No|user_note: 先别继续"));
+  await assert.rejects(() => adapter.resolveUserInput("input-1", { answers: {} }), /未找到/);
 });
 
 test("AppServerCodexAdapter cancels MCP elicitation and dynamic tool calls without enabling tools", async () => {

@@ -19,6 +19,7 @@ import type {
   CodexRunOptions,
   StartSessionInput,
   CodexPromptInput,
+  CodexUserInputResponse,
 } from "./types.js";
 import { displayCodexSessionTitle, findCodexSessionById, type CodexRunPolicy } from "./codex-cli.js";
 import { ensureCodexStatePreviewIfEmpty } from "./codex-state-preview.js";
@@ -28,7 +29,7 @@ import { approvalFromServerRequest, responseForApprovalDecision } from "./app-se
 import { goalFromResponse, goalFromSetResponse } from "./app-server/goal-api.js";
 import { appServerUserInput } from "./app-server/input-mapper.js";
 import { appServerErrorMessage, isTransientAppServerError } from "./app-server/notification-mapper.js";
-import { unsupportedServerRequestResponse } from "./app-server/server-request-mapper.js";
+import { unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "./app-server/server-request-mapper.js";
 import {
   cloneModelPolicy,
   modelInfoFromResponse,
@@ -47,7 +48,7 @@ import { AppServerRpcClient } from "./app-server/rpc-client.js";
 import { AppServerSessionStore } from "./app-server/session-store.js";
 import { collaborationModePayload, truncatePrompt, withContext, withModelPolicy } from "./app-server/session-status.js";
 import { AppServerTurnController } from "./app-server/turn-controller.js";
-import type { JsonRpcNotification, JsonRpcRequest, PendingServerApproval } from "./app-server/types.js";
+import type { JsonRpcNotification, JsonRpcRequest, PendingServerApproval, PendingServerUserInput } from "./app-server/types.js";
 import { AsyncEventQueue } from "./app-server/turn-store.js";
 import { isoFromSeconds, numberValue, objectValue, objectValueOrNull, stringValue } from "./app-server/value-parsers.js";
 
@@ -84,6 +85,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
   private readonly rpc: AppServerRpcClient;
   private readonly sessionStore = new AppServerSessionStore();
   private readonly pendingApprovals = new Map<string, PendingServerApproval>();
+  private readonly pendingUserInputs = new Map<string, PendingServerUserInput>();
   private readonly compactWaiters = new Map<string, CompactWaiter>();
   private readonly turns = new AppServerTurnController({
     sessions: this.sessionStore.records,
@@ -113,6 +115,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
   async stop(): Promise<void> {
     this.turns.closeAll();
     this.pendingApprovals.clear();
+    this.pendingUserInputs.clear();
     for (const waiter of this.compactWaiters.values()) {
       if (waiter.timer) clearTimeout(waiter.timer);
       waiter.reject(new Error("codex app-server stopped"));
@@ -178,6 +181,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       throw new Error("当前 app-server 仍有运行中的 Codex turn，不能安全重启并刷新上下文。请等待当前任务结束后重试。");
     }
     this.pendingApprovals.clear();
+    this.pendingUserInputs.clear();
     for (const waiter of this.compactWaiters.values()) {
       if (waiter.timer) clearTimeout(waiter.timer);
       waiter.reject(new Error("codex app-server restarting for session reload"));
@@ -331,6 +335,11 @@ export class AppServerCodexAdapter implements CodexAdapter {
       }
       this.pendingApprovals.delete(approvalKey);
     }
+    for (const [requestId, pending] of this.pendingUserInputs.entries()) {
+      if (pending.sessionId === sessionId && pending.turnId === turnId) {
+        this.pendingUserInputs.delete(requestId);
+      }
+    }
     const turn = this.turns.get(turnId);
     if (turn && !turn.closed) {
       turn.queue.push({ type: "turn.completed", sessionId, turnId });
@@ -352,6 +361,19 @@ export class AppServerCodexAdapter implements CodexAdapter {
     if (!pending) throw new Error(`未找到 Codex app-server 审批请求: ${approvalKey}`);
     await pending.resolve(decision);
     this.pendingApprovals.delete(approvalKey);
+  }
+
+  async resolveUserInput(requestId: string, response: CodexUserInputResponse): Promise<void> {
+    const pending = this.pendingUserInputs.get(requestId);
+    if (!pending) throw new Error(`未找到 Codex app-server 用户输入请求: ${requestId}`);
+    await pending.resolve(response);
+    this.pendingUserInputs.delete(requestId);
+    this.turns.pushTurnEvent(pending.turnId, {
+      type: "input.resolved",
+      sessionId: pending.sessionId,
+      turnId: pending.turnId,
+      adapterRequestId: requestId,
+    });
   }
 
   getRunPolicy(sessionId?: string): CodexRunPolicy {
@@ -536,6 +558,24 @@ export class AppServerCodexAdapter implements CodexAdapter {
       : stringValue(params.id);
     if (!requestId) return;
     const pending = this.pendingApprovals.get(requestId);
+    const pendingInput = this.pendingUserInputs.get(requestId);
+    if (!pending && !pendingInput) return;
+    if (pendingInput) {
+      this.pendingUserInputs.delete(requestId);
+      const sessionId = this.sessionStore.resolveThreadSession(stringValue(params.threadId) ?? pendingInput.sessionId);
+      const stored = this.sessionStore.get(sessionId);
+      if (stored) {
+        stored.status = withContext(stored, { type: "running", turnId: pendingInput.turnId, startedAt: runningStartedAt(stored.status) });
+        stored.updatedAt = new Date().toISOString();
+      }
+      this.turns.pushTurnEvent(pendingInput.turnId, {
+        type: "input.resolved",
+        sessionId,
+        turnId: pendingInput.turnId,
+        adapterRequestId: requestId,
+      });
+      return;
+    }
     if (!pending) return;
     this.pendingApprovals.delete(requestId);
     const sessionId = this.sessionStore.resolveThreadSession(stringValue(params.threadId) ?? pending.sessionId);
@@ -782,6 +822,10 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   private async handleServerRequest(request: JsonRpcRequest): Promise<void> {
     const params = objectValue(request.params);
+    if (request.method === "item/tool/requestUserInput") {
+      this.handleUserInputServerRequest(request, params);
+      return;
+    }
     const approval = approvalFromServerRequest(request.method, request.id, params);
     if (!approval) {
       const fallback = unsupportedServerRequestResponse(request.method, params);
@@ -825,7 +869,51 @@ export class AppServerCodexAdapter implements CodexAdapter {
     this.turns.pushTurnEvent(turnId, { type: "approval.requested", sessionId, turnId, approval });
   }
 
+  private handleUserInputServerRequest(request: JsonRpcRequest, params: Record<string, unknown>): void {
+    const contextSessionId = stringValue(params.threadId) ?? stringValue(params.conversationId);
+    const sessionId = contextSessionId ? this.sessionStore.resolveThreadSession(contextSessionId) : undefined;
+    const inputRequest = sessionId ? userInputRequestFromServerRequest(request.id, params, sessionId) : undefined;
+    if (!inputRequest) {
+      this.writeMessage({
+        id: request.id,
+        error: { code: -32602, message: "invalid item/tool/requestUserInput params" },
+      });
+      return;
+    }
+    const turnId = inputRequest.turnId;
+    const resolvedSessionId = inputRequest.sessionId;
+    this.turns.get(turnId) ?? this.turns.createBackgroundTurn(resolvedSessionId, turnId);
+    const stored = this.sessionStore.get(resolvedSessionId);
+    if (stored) {
+      const startedAt = runningStartedAt(stored.status);
+      stored.status = withContext(stored, { type: "waiting_input", detail: "Codex 等待用户输入", startedAt });
+      stored.updatedAt = new Date().toISOString();
+    }
+    const adapterRequestId = String(request.id);
+    const pending: PendingServerUserInput = {
+      method: request.method,
+      requestId: request.id,
+      sessionId: resolvedSessionId,
+      turnId,
+      params,
+      resolve: async (response) => {
+        this.writeMessage({
+          id: request.id,
+          result: response,
+        });
+        const current = this.sessionStore.get(resolvedSessionId);
+        if (current) {
+          current.status = withContext(current, { type: "running", turnId, startedAt: runningStartedAt(current.status) });
+          current.updatedAt = new Date().toISOString();
+        }
+      },
+    };
+    this.pendingUserInputs.set(adapterRequestId, pending);
+    this.turns.pushTurnEvent(turnId, { type: "input.requested", sessionId: resolvedSessionId, turnId, request: inputRequest });
+  }
+
   private handleFatalAppServerError(error: Error): void {
+    this.pendingUserInputs.clear();
     for (const waiter of this.compactWaiters.values()) {
       if (waiter.timer) clearTimeout(waiter.timer);
       waiter.reject(error);

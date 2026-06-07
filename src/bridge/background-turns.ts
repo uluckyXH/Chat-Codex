@@ -10,6 +10,7 @@ import { composeFinalAnswer } from "./formatters.js";
 import type { BridgeDelivery } from "./delivery.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
 import { BridgeNotificationDelivery } from "./notification-delivery.js";
+import { BridgePendingInputManager } from "./pending-input.js";
 
 export interface BridgeBackgroundTurnsOptions {
   state: MemoryStateStore;
@@ -27,6 +28,7 @@ export interface BridgeBackgroundTurnsOptions {
   ): boolean;
   progressDelivery?: BridgeProgressDelivery;
   notificationDelivery?: BridgeNotificationDelivery;
+  pendingInput?: BridgePendingInputManager;
   startRouteWorker(routeKey: string): void;
   routeQueueLength(routeKey: string): number;
   hasRouteWorker(routeKey: string): boolean;
@@ -43,6 +45,7 @@ export class BridgeBackgroundTurns {
   private readonly deliveryPolicyFor: BridgeBackgroundTurnsOptions["deliveryPolicyFor"];
   private readonly progressDelivery: BridgeProgressDelivery;
   private readonly notificationDelivery: BridgeNotificationDelivery;
+  private readonly pendingInput?: BridgePendingInputManager;
   private readonly startRouteWorker: BridgeBackgroundTurnsOptions["startRouteWorker"];
   private readonly routeQueueLength: BridgeBackgroundTurnsOptions["routeQueueLength"];
   private readonly hasRouteWorker: BridgeBackgroundTurnsOptions["hasRouteWorker"];
@@ -66,6 +69,7 @@ export class BridgeBackgroundTurns {
       state: this.state,
       delivery: this.delivery,
     });
+    this.pendingInput = options.pendingInput;
     this.startRouteWorker = options.startRouteWorker;
     this.routeQueueLength = options.routeQueueLength;
     this.hasRouteWorker = options.hasRouteWorker;
@@ -107,6 +111,26 @@ export class BridgeBackgroundTurns {
         event,
       });
       if (!existingState) this.turns.delete(event.turnId);
+    } else if (event.type === "input.requested") {
+      this.state.setSessionStatus(event.sessionId, {
+        type: "waiting_input",
+        detail: "Codex 等待用户输入",
+        startedAt: currentStartedAt(this.state.getSession(event.sessionId)?.status),
+      });
+      await this.pendingInput?.start({
+        routeKey: state.routeKey,
+        target: state.target,
+        message: state.message,
+        request: event.request,
+      });
+    } else if (event.type === "input.resolved") {
+      await this.pendingInput?.handleResolved(state.routeKey, event.adapterRequestId);
+      this.state.setSessionStatus(event.sessionId, {
+        type: "running",
+        turnId: event.turnId,
+        task: "Goal 自动续跑",
+        startedAt: currentStartedAt(this.state.getSession(event.sessionId)?.status),
+      });
     } else if (event.type === "assistant.plan") {
       state.finalPlanText = event.text;
     } else if (event.type === "assistant.delta") {

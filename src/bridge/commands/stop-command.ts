@@ -16,6 +16,7 @@ export interface StopCommandOptions {
   delivery: BridgeDelivery;
   routeQueue: BridgeRouteQueue;
   routeSteering: BridgeRouteSteering;
+  clearPendingInput?(routeKey: string): number;
 }
 
 export async function handleStopCommand(
@@ -25,9 +26,11 @@ export async function handleStopCommand(
 ): Promise<void> {
   const binding = options.state.getBinding(message.routeKey);
   const clearedMedia = options.pendingMedia.clear(message.routeKey);
+  const clearedInputs = options.clearPendingInput?.(message.routeKey) ?? 0;
   if (!binding) {
     await options.delivery.sendText(target, [
       "当前没有活跃 Codex 会话。",
+      clearedInputs > 0 ? `已清理 ${clearedInputs} 个等待回答的 Codex 输入请求。` : undefined,
       clearedMedia > 0 ? clearedPendingMediaText(clearedMedia) : undefined,
     ].filter(Boolean).join("\n"));
     return;
@@ -35,10 +38,11 @@ export async function handleStopCommand(
   const status = await options.codex.getStatus(binding.sessionId);
   const workerRunning = options.routeQueue.hasWorker(message.routeKey);
   const clearedSteers = options.routeSteering.clearRouteState(message.routeKey);
-  if (!workerRunning && status.type !== "running" && status.type !== "waiting_approval") {
+  if (!workerRunning && status.type !== "running" && status.type !== "waiting_approval" && status.type !== "waiting_input") {
     await options.delivery.sendText(target, [
       "当前没有正在运行的 Codex 任务。",
       clearedSteers > 0 ? `已清空 ${clearedSteers} 条待投递补充消息。` : undefined,
+      clearedInputs > 0 ? `已清理 ${clearedInputs} 个等待回答的 Codex 输入请求。` : undefined,
       clearedMedia > 0 ? clearedPendingMediaText(clearedMedia) : undefined,
     ].filter(Boolean).join("\n"));
     return;
@@ -57,6 +61,7 @@ export async function handleStopCommand(
     "已请求停止当前 Codex 任务。",
     clearedSteers > 0 ? `已清空 ${clearedSteers} 条待投递补充消息。` : undefined,
     clearedQueued > 0 ? `已清空 ${clearedQueued} 条排队消息。` : undefined,
+    clearedInputs > 0 ? `已清理 ${clearedInputs} 个等待回答的 Codex 输入请求。` : undefined,
     clearedMedia > 0 ? clearedPendingMediaText(clearedMedia) : undefined,
   ].filter(Boolean).join("\n"));
 }

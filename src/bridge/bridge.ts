@@ -34,6 +34,7 @@ import { SessionContextRefreshManager } from "./context-refresh.js";
 import { BridgeDelivery } from "./delivery.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
 import { BridgeNotificationDelivery } from "./notification-delivery.js";
+import { BridgePendingInputManager } from "./pending-input.js";
 import { BridgeRouteQueue } from "./route-queue.js";
 import { BridgeRouteSteering } from "./route-steering.js";
 import { RouteTrustGate } from "./route-trust-gate.js";
@@ -94,6 +95,7 @@ export class Bridge {
   private readonly delivery: BridgeDelivery;
   private readonly progressDelivery: BridgeProgressDelivery;
   private readonly notificationDelivery: BridgeNotificationDelivery;
+  private readonly pendingInput: BridgePendingInputManager;
   private readonly routeTrustGate: RouteTrustGate;
   private readonly contextRefresh: SessionContextRefreshManager;
   private readonly backgroundTurns: BridgeBackgroundTurns;
@@ -168,6 +170,11 @@ export class Bridge {
       state: this.state,
       delivery: this.delivery,
     });
+    this.pendingInput = new BridgePendingInputManager({
+      codex: this.codex,
+      delivery: this.delivery,
+      timeoutMs: options.requestUserInputTimeoutMs,
+    });
     this.sessionFlow = new BridgeSessionFlow({
       codex: this.codex,
       state: this.state,
@@ -198,6 +205,7 @@ export class Bridge {
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
       progressDelivery: this.progressDelivery,
       notificationDelivery: this.notificationDelivery,
+      pendingInput: this.pendingInput,
       contextRefresh: this.contextRefresh,
     });
     this.backgroundTurns = new BridgeBackgroundTurns({
@@ -212,6 +220,7 @@ export class Bridge {
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
       progressDelivery: this.progressDelivery,
       notificationDelivery: this.notificationDelivery,
+      pendingInput: this.pendingInput,
       startRouteWorker: (routeKey) => this.routeQueue.startRouteWorker(routeKey),
       routeQueueLength: (routeKey) => this.routeQueue.queueLength(routeKey),
       hasRouteWorker: (routeKey) => this.routeQueue.hasWorker(routeKey),
@@ -330,6 +339,7 @@ export class Bridge {
           delivery: this.delivery,
           routeQueue: this.routeQueue,
           routeSteering: this.routeSteering,
+          clearPendingInput: (routeKey) => this.pendingInput.clearRoute(routeKey),
         }, message, target),
         compact: (message, target, args) => handleCompactCommand({
           codex: this.codex,
@@ -356,6 +366,7 @@ export class Bridge {
   async stop(): Promise<void> {
     this.routeSteering.clearAll();
     this.pendingMedia.clearAll();
+    this.pendingInput.clearAll();
     this.progressDelivery.clearAll();
     this.stopBackgroundEvents?.();
     this.stopBackgroundEvents = undefined;
@@ -396,6 +407,12 @@ export class Bridge {
       await this.delivery.sendText(target, feishuGroupRegistrationRequiredText());
       return;
     }
+    if (await this.pendingInput.handleMessage({
+      message,
+      target,
+      rawText: text,
+      commandName: command?.name,
+    })) return;
     if (this.isCompactRunning(message.routeKey)) {
       if (command?.isCommand && isCommandAllowedDuringCompact(command.name ?? "")) {
         await this.commandRouter.handle(message, target, command.name ?? "", command.args, text);
@@ -534,6 +551,7 @@ export class Bridge {
   }
 
   private async isRouteExecutionBusyWithoutCompact(routeKey: string): Promise<boolean> {
+    if (this.pendingInput.has(routeKey)) return true;
     if (this.routeQueue.hasWorker(routeKey) || this.backgroundTurns.hasForRoute(routeKey)) return true;
     if (this.routeQueue.queueLength(routeKey) > 0) return true;
     if (this.routeSteering.hasPendingWorkForRoute(routeKey)) return true;
@@ -542,7 +560,7 @@ export class Bridge {
     if (!binding) return false;
     try {
       const status = await this.codex.getStatus(binding.sessionId);
-      return status.type === "running" || status.type === "waiting_approval";
+      return status.type === "running" || status.type === "waiting_approval" || status.type === "waiting_input";
     } catch {
       return false;
     }

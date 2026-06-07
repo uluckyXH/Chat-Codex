@@ -6,6 +6,7 @@ import type {
   CodexSession,
   CodexSessionModelInfo,
   CodexSessionStatus,
+  CodexUserInputResponse,
 } from "../types.js";
 import type { CommandExecutionRecord } from "./command-output-summary.js";
 
@@ -47,6 +48,15 @@ export interface PendingServerApproval {
   turnId: string;
   params: Record<string, unknown>;
   resolve: (decision: ApprovalDecision) => Promise<void>;
+}
+
+export interface PendingServerUserInput {
+  method: string;
+  requestId: string | number;
+  sessionId: string;
+  turnId: string;
+  params: Record<string, unknown>;
+  resolve: (response: CodexUserInputResponse) => Promise<void>;
 }
 
 export interface AppServerEventQueue<T> extends AsyncIterable<T> {

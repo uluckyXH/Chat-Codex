@@ -13,6 +13,7 @@ import type { BridgeDelivery } from "./delivery.js";
 import type { SessionContextRefreshManager } from "./context-refresh.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
 import { BridgeNotificationDelivery } from "./notification-delivery.js";
+import { BridgePendingInputManager } from "./pending-input.js";
 import type { BridgeSessionFlow } from "./session-flow.js";
 import { StaleCodexSessionBindingError, type StaleCodexSessionBindingInfo } from "./session-flow.js";
 import {
@@ -39,6 +40,7 @@ export interface BridgeRouteQueueOptions {
   ): boolean;
   progressDelivery?: BridgeProgressDelivery;
   notificationDelivery?: BridgeNotificationDelivery;
+  pendingInput?: BridgePendingInputManager;
   contextRefresh?: SessionContextRefreshManager;
 }
 
@@ -56,6 +58,7 @@ export class BridgeRouteQueue {
   private readonly contextRefresh?: SessionContextRefreshManager;
   private readonly progressDelivery: BridgeProgressDelivery;
   private readonly notificationDelivery: BridgeNotificationDelivery;
+  private readonly pendingInput?: BridgePendingInputManager;
   private readonly queues = new Map<string, QueuedPrompt[]>();
   private readonly workers = new Map<string, Promise<void>>();
   private readonly abortControllers = new Map<string, AbortController>();
@@ -81,6 +84,7 @@ export class BridgeRouteQueue {
       state: this.state,
       delivery: this.delivery,
     });
+    this.pendingInput = options.pendingInput;
   }
 
   async enqueuePrompt(
@@ -262,6 +266,26 @@ export class BridgeRouteQueue {
                 routeKey: message.routeKey,
                 target,
                 event,
+              });
+            } else if (event.type === "input.requested") {
+              this.state.setSessionStatus(session.id, {
+                type: "waiting_input",
+                detail: "Codex 等待用户输入",
+                startedAt: currentTurnStartedAt,
+              });
+              await this.pendingInput?.start({
+                routeKey: message.routeKey,
+                target,
+                message,
+                request: event.request,
+              });
+            } else if (event.type === "input.resolved") {
+              await this.pendingInput?.handleResolved(message.routeKey, event.adapterRequestId);
+              this.state.setSessionStatus(session.id, {
+                type: "running",
+                turnId: event.turnId,
+                task: truncateForChannel(promptText || codexInputPlainText(prompt), 120),
+                startedAt: currentTurnStartedAt,
               });
             } else if (event.type === "assistant.plan") {
               finalPlanText = event.text;

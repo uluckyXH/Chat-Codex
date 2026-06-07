@@ -109,9 +109,9 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES: AppServerProtocolCapability[] = [
     "item/permissions/requestApproval",
     "applyPatchApproval",
     "execCommandApproval",
+    "item/tool/requestUserInput",
   ]),
   ...cap("server_request", "unsupported_visible", "adapter", [
-    "item/tool/requestUserInput",
     "mcpServer/elicitation/request",
     "item/tool/call",
     "account/chatgptAuthTokens/refresh",
