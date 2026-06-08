@@ -9,6 +9,7 @@ import type {
   ChannelMessageHandler,
   ChannelStatus,
   ChannelTarget,
+  ChannelToolProgress,
   SendOptions,
   SendResult,
 } from "../../protocol/channel.js";
@@ -36,6 +37,13 @@ export interface SentMockTyping {
   options?: SendOptions;
 }
 
+export interface SentMockToolProgress {
+  target: ChannelTarget;
+  progress: ChannelToolProgress;
+  options?: SendOptions;
+  result: SendResult;
+}
+
 export interface MockChannelAdapterOptions {
   id?: string;
   label?: string;
@@ -53,6 +61,7 @@ export class MockChannelAdapter implements ChannelAdapter {
   readonly sentMessages: SentMockMessage[] = [];
   readonly sentMedia: SentMockMedia[] = [];
   readonly sentTyping: SentMockTyping[] = [];
+  readonly sentToolProgress: SentMockToolProgress[] = [];
   private handler?: ChannelMessageHandler;
   private state: ChannelStatus;
 
@@ -125,6 +134,17 @@ export class MockChannelAdapter implements ChannelAdapter {
 
   async sendTyping(target: ChannelTarget, typing: boolean, options?: SendOptions): Promise<void> {
     this.sentTyping.push({ target, typing, options });
+  }
+
+  async sendToolProgress(target: ChannelTarget, progress: ChannelToolProgress, options?: SendOptions): Promise<SendResult> {
+    const result: SendResult = {
+      channelId: this.id,
+      messageId: `mock-tool-${this.sentToolProgress.length + 1}`,
+      deliveredAt: new Date().toISOString(),
+    };
+    this.sentToolProgress.push({ target, progress, options, result });
+    this.state = { ...this.state, lastOutboundAt: result.deliveredAt };
+    return result;
   }
 
   async emitText(text: string, options: {

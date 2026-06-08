@@ -275,7 +275,7 @@ Bridge Core
 
 多渠道不能假设所有平台都适合相同的出站消息形态。Bridge Core 应继续通过 `ChannelDeliveryPolicy` 读取渠道策略，而不是写平台名分支。
 
-当前微信就是特殊投递策略：
+当前主干里的微信是特殊低噪声投递策略：
 
 - 不投递 task-start。
 - 不投递阶段性 progress。
@@ -284,6 +284,8 @@ Bridge Core
 - final answer、错误、审批、队列提示、命令回复和媒体结果仍然投递。
 - Codex 运行期间可使用微信 typing 能力，但 typing 失败不影响主回复。
 - WeixinAdapter 自己串行出站并做最小发送间隔，降低微信侧连续消息丢显或乱序风险。
+
+微信 2.4.4 结构化进度实验只应扩展微信 adapter 自己的策略：普通文本进度只公开 `/progress silent|brief`，结构化工具生命周期代码保留但不通过普通 `/progress tools` 暴露；真实微信不开放 `/progress realtime`。这个能力不应写成 Bridge Core 的平台名分支，也不改变飞书的 realtime 策略。
 
 Terminal/Mock 使用默认完整投递策略。飞书等后续渠道应由各自 adapter 声明策略，例如卡片更新、thread reply、低频聚合或 suppress。新增渠道时优先扩展 `ChannelDeliveryPolicy`，不要在 Bridge Core 增加 `if channel === "xxx"`。
 

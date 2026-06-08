@@ -1,6 +1,9 @@
 export type ChannelTaskStartDelivery = "send" | "suppress";
 export type ChannelProgressDelivery = "send" | "suppress" | "aggregate";
 export type ChannelProgressCommandMode = "enabled" | "disabled";
+export type ChannelToolProgressDelivery = "send" | "suppress";
+export type ChannelRealtimeProgressDelivery = "send" | "suppress";
+export type ChannelDefaultProgressMode = "brief" | "detailed" | "realtime" | "tools" | "silent";
 
 export interface ChannelRefreshCommandPolicy {
   command: string;
@@ -12,7 +15,11 @@ export interface ChannelRefreshCommandPolicy {
 export interface ChannelDeliveryPolicy {
   taskStart: ChannelTaskStartDelivery;
   progress: ChannelProgressDelivery;
+  toolProgress?: ChannelToolProgressDelivery;
+  realtimeProgress?: ChannelRealtimeProgressDelivery;
+  allowedProgressModes?: readonly ChannelDefaultProgressMode[];
   progressCommand: ChannelProgressCommandMode;
+  defaultProgressMode?: ChannelDefaultProgressMode;
   progressDisabledMessage?: string;
   statusProgressLabel?: string;
   statusProgressDescription?: string;
@@ -22,7 +29,11 @@ export interface ChannelDeliveryPolicy {
 export const DEFAULT_CHANNEL_DELIVERY_POLICY: ChannelDeliveryPolicy = {
   taskStart: "send",
   progress: "send",
+  toolProgress: "suppress",
+  realtimeProgress: "suppress",
+  allowedProgressModes: ["silent", "brief"],
   progressCommand: "enabled",
+  defaultProgressMode: "brief",
   refreshCommands: [],
 };
 

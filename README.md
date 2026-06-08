@@ -224,6 +224,14 @@ Codex CLI / Codex app-server
 
 这些命令从微信或飞书私聊里发送。命令消息不会进入普通 prompt 队列，会立即处理。
 
+### 进度、旁白与微信投递限制
+
+微信渠道不适合持续高频投递 Codex 过程消息。真实使用中，连续投递可能出现 `sendmessage failed: ret=-2 errcode=0`、消息延迟或消息堆积；Chat-Codex 因此默认微信为 `silent`，只公开 `silent/brief`，不开放 `realtime`。飞书支持 `realtime/silent/brief`。
+
+`brief` 会投递 Codex 旁白、计划、搜索和文件变更摘要，但仍不是“每条过程消息都实时到微信”。`/plan` 会默认低频展示 Codex 旁白，方便看到计划协作内容；命令进度和工具细节仍不会因此在微信里刷屏。
+
+`/fff` 是微信专用静默刷新命令：它不会进入 Codex prompt，也不会产生聊天回复。它的作用是让微信侧产生一次新的入站消息，刷新当前 route 的最近消息上下文和 adapter 可用投递上下文；它不是失败消息重发命令，也不能保证修复所有 `ret=-2`。
+
 | 命令 | 用途 |
 | --- | --- |
 | `/help` | 查看当前渠道可用命令 |
@@ -242,7 +250,7 @@ Codex CLI / Codex app-server
 | `/permission` | 查看当前 session 权限 |
 | `/permission approval` | 切回审批模式 |
 | `/permission full confirm` | 切到完全权限 |
-| `/plan` / `/plan <任务>` | 进入计划模式，或以计划模式处理任务 |
+| `/plan` / `/plan <任务>` | 进入计划模式，或以计划模式处理任务；计划模式默认低频展示 Codex 旁白 |
 | `/code` / `/code <任务>` | 切回执行模式，或以执行模式处理任务 |
 | `/goal [目标]` | 查看或设置实验 Goal |
 | `/goal pause` / `/goal resume` / `/goal clear` | 管理实验 Goal 状态 |
@@ -252,8 +260,8 @@ Codex CLI / Codex app-server
 | `/model default` | 清除当前 session 的模型覆盖 |
 | `/sendfile <任务>` | 允许 Codex 本轮声明并发送文件 |
 | `/compact` | 压缩当前 session 的历史上下文，需 `/compact confirm` 确认 |
-| `/progress [brief\|detailed\|silent]` | 非微信渠道的进度投递模式 |
-| `/fff` | 微信专用静默刷新 |
+| `/progress [silent\|brief\|realtime]` | 当前聊天的进度投递模式；微信只支持 `silent/brief`，飞书支持 `realtime/silent/brief` |
+| `/fff` | 微信专用静默刷新，不进入 Codex，不发送回复 |
 
 ## 文件发送
 

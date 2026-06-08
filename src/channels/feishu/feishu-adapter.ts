@@ -59,6 +59,12 @@ import type {
 const DEFAULT_SOURCE_VERSION = "node-sdk";
 const DEFAULT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const FEISHU_TYPING_EMOJI_TYPE = "Typing";
+const FEISHU_DELIVERY_POLICY: ChannelDeliveryPolicy = {
+  ...DEFAULT_CHANNEL_DELIVERY_POLICY,
+  realtimeProgress: "send",
+  allowedProgressModes: ["realtime", "silent", "brief"],
+  defaultProgressMode: "brief",
+};
 const SILENT_FEISHU_SDK_LOGGER = {
   fatal: () => undefined,
   error: () => undefined,
@@ -217,7 +223,7 @@ export class FeishuAdapter implements ChannelAdapter {
   }
 
   getDeliveryPolicy(): ChannelDeliveryPolicy {
-    return DEFAULT_CHANNEL_DELIVERY_POLICY;
+    return FEISHU_DELIVERY_POLICY;
   }
 
   onMessage(handler: ChannelMessageHandler): void {

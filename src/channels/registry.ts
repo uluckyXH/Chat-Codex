@@ -8,6 +8,7 @@ import type {
   ChannelMessageHandler,
   ChannelStatus,
   ChannelTarget,
+  ChannelToolProgress,
   SendOptions,
   SendResult,
 } from "../protocol/channel.js";
@@ -165,6 +166,12 @@ export class ChannelRegistry {
     const capabilities = channel.getCapabilities();
     if (!capabilities.typing || !channel.sendTyping) return;
     await channel.sendTyping(target, typing, options);
+  }
+
+  async sendToolProgress(target: ChannelTarget, progress: ChannelToolProgress, options?: SendOptions): Promise<SendResult | undefined> {
+    const channel = this.requireTargetChannel(target);
+    if (!channel.sendToolProgress) return undefined;
+    return channel.sendToolProgress(target, progress, options);
   }
 
   private async handleMessage(channel: ChannelAdapter, message: ChannelMessage): Promise<void> {

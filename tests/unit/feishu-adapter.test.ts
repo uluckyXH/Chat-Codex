@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { FeishuAdapter } from "../../src/channels/feishu/feishu-adapter.js";
-import { DEFAULT_CHANNEL_DELIVERY_POLICY } from "../../src/protocol/delivery-policy.js";
 import { FakeFeishuTransportFactory, sampleFeishuTextEvent } from "../helpers/feishu-fakes.js";
 
 const credentials = {
@@ -32,7 +31,9 @@ test("FeishuAdapter starts websocket and declares private media capabilities", a
 
   assert.equal((await adapter.getStatus()).state, "connected");
   assert.equal(factory.wsClient?.starts, 1);
-  assert.deepEqual(adapter.getDeliveryPolicy(), DEFAULT_CHANNEL_DELIVERY_POLICY);
+  assert.deepEqual(adapter.getDeliveryPolicy().allowedProgressModes, ["realtime", "silent", "brief"]);
+  assert.equal(adapter.getDeliveryPolicy().realtimeProgress, "send");
+  assert.equal(adapter.getDeliveryPolicy().defaultProgressMode, "brief");
   assert.deepEqual(adapter.getCapabilities(), {
     text: true,
     media: true,

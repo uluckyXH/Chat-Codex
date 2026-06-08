@@ -53,6 +53,7 @@ export function createTurnQueueRecord(
     agentMessagePhases: new Map(),
     emittedProgressItemIds: new Set(),
     emittedProgress: new Set(),
+    emittedCommentary: new Set(),
     closed: false,
   };
 }

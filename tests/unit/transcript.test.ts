@@ -119,17 +119,18 @@ test("ConsoleTranscriptSink can color terminal transcript records", () => {
     now: () => new Date(2026, 4, 14, 8, 9, 10),
   });
 
-  sink.outbound({
+  sink.outboundProgress({
     channelId: "weixin",
     routeKey: "weixin:acct:direct:chat-1",
     accountId: "acct",
     conversation: { id: "chat-1", kind: "direct" },
     recipient: { id: "sender-1" },
-  }, "Codex 进度:\n我先检查状态。");
+  }, "我先检查状态。");
 
   const text = output.text();
   assert.match(text, /\x1b\[33;1m\[08:09:10] 微信 => direct:chat-1 \| 进度\x1b\[0m/);
   assert.match(text, /\x1b\[33m  我先检查状态。\x1b\[0m/);
+  assert.doesNotMatch(text, /Codex 进度:/);
 });
 
 test("ConsoleTranscriptSink prints local progress as not delivered", () => {
@@ -146,10 +147,58 @@ test("ConsoleTranscriptSink prints local progress as not delivered", () => {
     accountId: "acct",
     conversation: { id: "chat-1", kind: "direct" },
     recipient: { id: "sender-1" },
-  }, "Codex 进度:\n我先检查状态。");
+  }, "我先检查状态。");
 
   const text = output.text();
   assert.match(text, /\[08:09:10] 微信 -- direct:chat-1 \| 本地进度（未投递）/);
-  assert.match(text, /  Codex 进度:/);
   assert.match(text, /  我先检查状态。/);
+  assert.doesNotMatch(text, /Codex 进度:/);
+});
+
+test("ConsoleTranscriptSink prints commentary separately from progress", () => {
+  const output = new MemoryWritable();
+  const sink = new ConsoleTranscriptSink({
+    output,
+    color: false,
+    now: () => new Date(2026, 4, 14, 8, 9, 10),
+  });
+
+  const target = {
+    channelId: "weixin",
+    routeKey: "weixin:acct:direct:chat-1",
+    accountId: "acct",
+    conversation: { id: "chat-1", kind: "direct" as const },
+    recipient: { id: "sender-1" },
+  };
+  sink.observedCommentary(target, "我先说明方案。");
+  sink.outboundCommentary(target, "我先说明方案。");
+  sink.localCommentary(target, "旁白发送失败。");
+
+  const text = output.text();
+  assert.match(text, /\[08:09:10] 微信 -- direct:chat-1 \| 本地旁白/);
+  assert.match(text, /\[08:09:10] 微信 => direct:chat-1 \| 旁白/);
+  assert.match(text, /\[08:09:10] 微信 -- direct:chat-1 \| 本地旁白（未投递）/);
+  assert.doesNotMatch(text, /\| 进度/);
+});
+
+test("ConsoleTranscriptSink prints observed local progress separately from delivery failures", () => {
+  const output = new MemoryWritable();
+  const sink = new ConsoleTranscriptSink({
+    output,
+    color: false,
+    now: () => new Date(2026, 4, 14, 8, 9, 10),
+  });
+
+  sink.observedProgress({
+    channelId: "weixin",
+    routeKey: "weixin:acct:direct:chat-1",
+    accountId: "acct",
+    conversation: { id: "chat-1", kind: "direct" },
+    recipient: { id: "sender-1" },
+  }, "正在分析。");
+
+  const text = output.text();
+  assert.match(text, /\[08:09:10] 微信 -- direct:chat-1 \| 本地进度/);
+  assert.doesNotMatch(text, /本地进度（未投递）/);
+  assert.match(text, /  正在分析。/);
 });

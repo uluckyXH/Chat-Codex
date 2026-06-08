@@ -160,9 +160,18 @@ export interface CodexUserInputResponse {
   answers: Record<string, CodexUserInputAnswer>;
 }
 
+export interface CodexToolProgress {
+  phase: "start" | "end";
+  itemId: string;
+  toolName: string;
+  status?: "completed" | "failed" | "blocked" | "unknown";
+}
+
 export type CodexEvent =
   | { type: "turn.started"; sessionId: string; turnId: string; startedAt?: string }
   | { type: "assistant.progress"; sessionId: string; turnId: string; text: string; kind?: CodexProgressKind }
+  | { type: "assistant.commentary"; sessionId: string; turnId: string; text: string; itemId?: string }
+  | { type: "tool.progress"; sessionId: string; turnId: string; progress: CodexToolProgress }
   | { type: "codex.notification"; sessionId: string; turnId: string; notification: CodexNotification }
   | { type: "assistant.plan"; sessionId: string; turnId: string; text: string }
   | { type: "assistant.delta"; sessionId: string; turnId: string; text: string }

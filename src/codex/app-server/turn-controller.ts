@@ -177,7 +177,7 @@ export class AppServerTurnController {
       const itemId = stringValue(params.itemId);
       const phase = itemId && turn ? turn.agentMessagePhases.get(itemId) : undefined;
       if (turn && itemId && phase === "commentary") {
-        this.appendProgressDelta(turn, sessionId, turnId, itemId, delta, "other");
+        this.appendCommentaryDelta(turn, itemId, delta);
         return;
       }
       if (turn) turn.finalText += delta;
@@ -273,6 +273,8 @@ export class AppServerTurnController {
   }
 
   private handleItemCompleted(turn: TurnQueueRecord, sessionId: string, turnId: string, item: Record<string, unknown>): void {
+    const toolProgress = toolProgressFromThreadItem(item, "end");
+    if (toolProgress) this.pushTurnEvent(turnId, { type: "tool.progress", sessionId, turnId, progress: toolProgress });
     const itemType = stringValue(item.type);
     const itemId = stringValue(item.id);
     if (itemId) this.flushProgressDraft(turn, sessionId, turnId, itemId);
@@ -281,7 +283,7 @@ export class AppServerTurnController {
       const phase = messagePhaseValue(item.phase);
       if (phase === "commentary") {
         if (itemId && turn.emittedProgressItemIds.has(itemId)) return;
-        if (text) this.pushProgressEvent(turn, sessionId, turnId, text, "other");
+        if (text) this.pushCommentaryEvent(turn, sessionId, turnId, text, itemId);
         return;
       }
       if (text) {
@@ -338,6 +340,13 @@ export class AppServerTurnController {
   }
 
   private handleItemStarted(turn: TurnQueueRecord, _sessionId: string, _turnId: string, item: Record<string, unknown>): void {
+    const toolProgress = toolProgressFromThreadItem(item, "start");
+    if (toolProgress) this.pushTurnEvent(turn.turnId, {
+      type: "tool.progress",
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+      progress: toolProgress,
+    });
     const itemType = stringValue(item.type);
     if (itemType === "reasoning") {
       this.pushProgressEvent(turn, turn.sessionId, turn.turnId, "正在分析...", "reasoning");
@@ -387,13 +396,24 @@ export class AppServerTurnController {
     kind: CodexProgressKind,
     prefix?: string,
   ): void {
-    const draft = turn.progressDrafts.get(itemId) ?? { kind, text: "", prefix };
+    const draft = turn.progressDrafts.get(itemId) ?? { type: "progress" as const, kind, text: "", prefix };
     draft.text += delta;
+    draft.type = "progress";
     draft.kind = kind;
     draft.prefix = prefix;
     turn.progressDrafts.set(itemId, draft);
     if (shouldFlushProgressDraft(draft.text)) {
       this.flushProgressDraft(turn, sessionId, turnId, itemId);
+    }
+  }
+
+  private appendCommentaryDelta(turn: TurnQueueRecord, itemId: string, delta: string): void {
+    const draft = turn.progressDrafts.get(itemId) ?? { type: "commentary" as const, text: "" };
+    draft.text += delta;
+    draft.type = "commentary";
+    turn.progressDrafts.set(itemId, draft);
+    if (shouldFlushProgressDraft(draft.text)) {
+      this.flushProgressDraft(turn, turn.sessionId, turn.turnId, itemId);
     }
   }
 
@@ -404,7 +424,11 @@ export class AppServerTurnController {
     const text = draft.text.trim();
     if (!text) return;
     turn.emittedProgressItemIds.add(itemId);
-    this.pushProgressEvent(turn, sessionId, turnId, `${draft.prefix ?? ""}${text}`, draft.kind);
+    if (draft.type === "commentary") {
+      this.pushCommentaryEvent(turn, sessionId, turnId, text, itemId);
+      return;
+    }
+    if (draft.kind) this.pushProgressEvent(turn, sessionId, turnId, `${draft.prefix ?? ""}${text}`, draft.kind);
   }
 
   private pushProgressEvent(
@@ -419,6 +443,25 @@ export class AppServerTurnController {
     turn.emittedProgress.add(normalized);
     turn.queue.push({ type: "assistant.progress", sessionId, turnId, text: normalized, kind });
   }
+
+  private pushCommentaryEvent(
+    turn: TurnQueueRecord,
+    sessionId: string,
+    turnId: string,
+    text: string,
+    itemId?: string,
+  ): void {
+    const normalized = text.trim();
+    if (!normalized || turn.emittedCommentary.has(normalized)) return;
+    turn.emittedCommentary.add(normalized);
+    turn.queue.push({
+      type: "assistant.commentary",
+      sessionId,
+      turnId,
+      text: normalized,
+      ...(itemId ? { itemId } : {}),
+    });
+  }
 }
 
 function startedAtFromNotification(params: Record<string, unknown>): string | undefined {
@@ -426,6 +469,53 @@ function startedAtFromNotification(params: Record<string, unknown>): string | un
   return isoFromSeconds(numberValue(turn.startedAt))
     ?? isoFromMilliseconds(numberValue(turn.startedAtMs))
     ?? isoFromMilliseconds(numberValue(params.startedAtMs));
+}
+
+function toolProgressFromThreadItem(
+  item: Record<string, unknown>,
+  phase: "start" | "end",
+): { phase: "start" | "end"; itemId: string; toolName: string; status?: "completed" | "failed" | "blocked" | "unknown" } | undefined {
+  const itemId = stringValue(item.id);
+  if (!itemId) return undefined;
+  const toolName = toolNameFromThreadItem(item);
+  if (!toolName) return undefined;
+  return {
+    phase,
+    itemId,
+    toolName,
+    ...(phase === "end" ? { status: toolStatusFromThreadItem(item) } : {}),
+  };
+}
+
+function toolNameFromThreadItem(item: Record<string, unknown>): string | undefined {
+  const itemType = stringValue(item.type);
+  if (itemType === "commandExecution") {
+    const command = stringValue(item.command);
+    return command ? `command: ${truncateToolName(command)}` : "command";
+  }
+  if (itemType === "mcpToolCall") {
+    const tool = [stringValue(item.server), stringValue(item.tool)].filter(Boolean).join("/");
+    return tool ? truncateToolName(tool) : "mcp_tool";
+  }
+  if (itemType === "webSearch") return "web_search";
+  return undefined;
+}
+
+function toolStatusFromThreadItem(item: Record<string, unknown>): "completed" | "failed" | "blocked" | "unknown" {
+  const itemType = stringValue(item.type);
+  const status = stringValue(item.status)?.toLowerCase();
+  const exitCode = numberValue(item.exitCode);
+  if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") return "failed";
+  if (status === "blocked") return "blocked";
+  if (status === "completed" || status === "complete" || status === "success" || status === "succeeded") return "completed";
+  if (typeof exitCode === "number") return exitCode === 0 ? "completed" : "failed";
+  if (itemType === "webSearch" || itemType === "mcpToolCall") return "completed";
+  return "unknown";
+}
+
+function truncateToolName(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length <= 80 ? normalized : `${normalized.slice(0, 77)}...`;
 }
 
 function isoFromMilliseconds(milliseconds: number | undefined): string | undefined {

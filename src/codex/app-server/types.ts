@@ -75,11 +75,13 @@ export interface TurnQueueRecord {
   agentMessagePhases: Map<string, "commentary" | "final_answer">;
   emittedProgressItemIds: Set<string>;
   emittedProgress: Set<string>;
+  emittedCommentary: Set<string>;
   closed: boolean;
 }
 
 export interface ProgressDraft {
-  kind: CodexProgressKind;
+  type: "progress" | "commentary";
+  kind?: CodexProgressKind;
   text: string;
   prefix?: string;
 }

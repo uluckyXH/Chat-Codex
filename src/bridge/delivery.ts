@@ -3,7 +3,7 @@ import type { PendingApproval } from "../approvals/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelRegistry } from "../channels/registry.js";
-import type { ChannelMedia, ChannelTarget } from "../protocol/channel.js";
+import type { ChannelMedia, ChannelTarget, ChannelToolProgress } from "../protocol/channel.js";
 import { extractBridgeSendFileRefs } from "./media-extractor.js";
 import { PROGRESS_SEND_FAILURE_COOLDOWN_MS, SEND_FILE_MAX_FILES } from "./bridge-types.js";
 import { sleep } from "./formatters.js";
@@ -22,7 +22,12 @@ export class BridgeDelivery {
   private readonly logger: Logger;
   private readonly transcript?: TranscriptSink;
   private readonly approvalSendRetryDelayMs: number;
-  private readonly progressSendSuppressedUntil = new Map<string, number>();
+  private readonly textProgressSendSuppressedUntil = new Map<string, number>();
+  private readonly textProgressSendSuppressionReason = new Map<string, string>();
+  private readonly commentarySendSuppressedUntil = new Map<string, number>();
+  private readonly commentarySendSuppressionReason = new Map<string, string>();
+  private readonly toolProgressSendSuppressedUntil = new Map<string, number>();
+  private readonly toolProgressSendSuppressionReason = new Map<string, string>();
 
   constructor(options: BridgeDeliveryOptions) {
     this.channels = options.channels;
@@ -37,7 +42,7 @@ export class BridgeDelivery {
       await this.deliverText(target, text);
     } catch (error) {
       this.logger.warn("channel text send failed", {
-        channel: target.channelId,
+        ...deliveryLogMeta(target),
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -58,7 +63,7 @@ export class BridgeDelivery {
       } catch (error) {
         failures += 1;
         this.logger.warn("approval message send failed", {
-          channel: target.channelId,
+          ...deliveryLogMeta(target),
           approvalKey: pending.approvalKey,
           failures,
           retryInMs: this.approvalSendRetryDelayMs,
@@ -71,18 +76,181 @@ export class BridgeDelivery {
   }
 
   async sendProgressText(routeKey: string, target: ChannelTarget, text: string): Promise<void> {
-    const suppressedUntil = this.progressSendSuppressedUntil.get(routeKey) ?? 0;
-    if (Date.now() < suppressedUntil) return;
+    const suppressedUntil = this.textProgressSendSuppressedUntil.get(routeKey) ?? 0;
+    if (Date.now() < suppressedUntil) {
+      this.transcript?.localProgress?.(target, formatProgressDeliverySuppressedText(text, {
+        reason: this.textProgressSendSuppressionReason.get(routeKey),
+        cooldownMs: Math.max(0, suppressedUntil - Date.now()),
+      }));
+      return;
+    }
+    const meta = {
+      ...deliveryLogMeta(target),
+      routeKey,
+      messageChars: text.length,
+      preview: deliveryTextPreview(text),
+    };
     try {
-      await this.deliverText(target, text);
-      this.progressSendSuppressedUntil.delete(routeKey);
+      await this.channels.sendText(target, text);
+      if (this.transcript?.outboundProgress) {
+        this.transcript.outboundProgress(target, text);
+      } else {
+        this.transcript?.outbound(target, text);
+      }
+      this.textProgressSendSuppressedUntil.delete(routeKey);
+      this.textProgressSendSuppressionReason.delete(routeKey);
     } catch (error) {
-      this.progressSendSuppressedUntil.set(routeKey, Date.now() + PROGRESS_SEND_FAILURE_COOLDOWN_MS);
+      const errorText = error instanceof Error ? error.message : String(error);
+      this.textProgressSendSuppressedUntil.set(routeKey, Date.now() + PROGRESS_SEND_FAILURE_COOLDOWN_MS);
+      this.textProgressSendSuppressionReason.set(routeKey, errorText);
       this.logger.warn("progress message send failed", {
-        channel: target.channelId,
-        error: error instanceof Error ? error.message : String(error),
+        ...meta,
+        error: errorText,
         cooldownMs: PROGRESS_SEND_FAILURE_COOLDOWN_MS,
       });
+      this.transcript?.localProgress?.(target, formatProgressDeliveryFailureText(text, errorText));
+    }
+  }
+
+  async sendRealtimeProgressText(routeKey: string, target: ChannelTarget, text: string): Promise<void> {
+    const meta = {
+      ...deliveryLogMeta(target),
+      routeKey,
+      messageChars: text.length,
+      preview: deliveryTextPreview(text),
+    };
+    try {
+      await this.channels.sendText(target, text);
+      if (this.transcript?.outboundProgress) {
+        this.transcript.outboundProgress(target, text);
+      } else {
+        this.transcript?.outbound(target, text);
+      }
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      this.logger.warn("realtime progress message send failed", {
+        ...meta,
+        error: errorText,
+      });
+      this.transcript?.localProgress?.(target, formatProgressDeliveryFailureText(text, errorText));
+    }
+  }
+
+  async sendCommentaryText(routeKey: string, target: ChannelTarget, text: string): Promise<boolean> {
+    const suppressedUntil = this.commentarySendSuppressedUntil.get(routeKey) ?? 0;
+    if (Date.now() < suppressedUntil) {
+      const localText = formatCommentaryDeliverySuppressedText(text, {
+        reason: this.commentarySendSuppressionReason.get(routeKey),
+        cooldownMs: Math.max(0, suppressedUntil - Date.now()),
+      });
+      if (this.transcript?.localCommentary) {
+        this.transcript.localCommentary(target, localText);
+      } else {
+        this.transcript?.localProgress?.(target, localText);
+      }
+      return false;
+    }
+    const meta = {
+      ...deliveryLogMeta(target),
+      routeKey,
+      messageChars: text.length,
+      preview: deliveryTextPreview(text),
+    };
+    try {
+      await this.channels.sendText(target, text);
+      if (this.transcript?.outboundCommentary) {
+        this.transcript.outboundCommentary(target, text);
+      } else if (this.transcript?.outboundProgress) {
+        this.transcript.outboundProgress(target, text);
+      } else {
+        this.transcript?.outbound(target, text);
+      }
+      this.commentarySendSuppressedUntil.delete(routeKey);
+      this.commentarySendSuppressionReason.delete(routeKey);
+      return true;
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      this.commentarySendSuppressedUntil.set(routeKey, Date.now() + PROGRESS_SEND_FAILURE_COOLDOWN_MS);
+      this.commentarySendSuppressionReason.set(routeKey, errorText);
+      this.logger.warn("commentary message send failed", {
+        ...meta,
+        error: errorText,
+        cooldownMs: PROGRESS_SEND_FAILURE_COOLDOWN_MS,
+      });
+      const localText = formatCommentaryDeliveryFailureText(text, errorText);
+      if (this.transcript?.localCommentary) {
+        this.transcript.localCommentary(target, localText);
+      } else {
+        this.transcript?.localProgress?.(target, localText);
+      }
+      return false;
+    }
+  }
+
+  async sendRealtimeCommentaryText(routeKey: string, target: ChannelTarget, text: string): Promise<boolean> {
+    const meta = {
+      ...deliveryLogMeta(target),
+      routeKey,
+      messageChars: text.length,
+      preview: deliveryTextPreview(text),
+    };
+    try {
+      await this.channels.sendText(target, text);
+      if (this.transcript?.outboundCommentary) {
+        this.transcript.outboundCommentary(target, text);
+      } else if (this.transcript?.outboundProgress) {
+        this.transcript.outboundProgress(target, text);
+      } else {
+        this.transcript?.outbound(target, text);
+      }
+      return true;
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      this.logger.warn("realtime commentary message send failed", {
+        ...meta,
+        error: errorText,
+      });
+      const localText = formatCommentaryDeliveryFailureText(text, errorText);
+      if (this.transcript?.localCommentary) {
+        this.transcript.localCommentary(target, localText);
+      } else {
+        this.transcript?.localProgress?.(target, localText);
+      }
+      return false;
+    }
+  }
+
+  async sendToolProgress(routeKey: string, target: ChannelTarget, progress: ChannelToolProgress): Promise<void> {
+    const suppressedUntil = this.toolProgressSendSuppressedUntil.get(routeKey) ?? 0;
+    if (Date.now() < suppressedUntil) {
+      this.transcript?.localProgress?.(target, formatToolProgressDeliverySuppressedText(progress, {
+        reason: this.toolProgressSendSuppressionReason.get(routeKey),
+        cooldownMs: Math.max(0, suppressedUntil - Date.now()),
+      }));
+      return;
+    }
+    const meta = {
+      ...deliveryLogMeta(target),
+      routeKey,
+      toolName: progress.toolName,
+      toolCallId: progress.toolCallId,
+      phase: progress.phase,
+      status: progress.status,
+    };
+    try {
+      await this.channels.sendToolProgress(target, progress);
+      this.toolProgressSendSuppressedUntil.delete(routeKey);
+      this.toolProgressSendSuppressionReason.delete(routeKey);
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      this.toolProgressSendSuppressedUntil.set(routeKey, Date.now() + PROGRESS_SEND_FAILURE_COOLDOWN_MS);
+      this.toolProgressSendSuppressionReason.set(routeKey, errorText);
+      this.logger.warn("tool progress send failed", {
+        ...meta,
+        error: errorText,
+        cooldownMs: PROGRESS_SEND_FAILURE_COOLDOWN_MS,
+      });
+      this.transcript?.localProgress?.(target, formatToolProgressDeliveryFailureText(progress, errorText));
     }
   }
 
@@ -142,7 +310,7 @@ export class BridgeDelivery {
       await this.channels.sendTyping(target, typing);
     } catch (error) {
       this.logger.warn("channel typing send failed", {
-        channel: target.channelId,
+        ...deliveryLogMeta(target),
         typing,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -158,7 +326,7 @@ export class BridgeDelivery {
     const capabilities = this.channels.getCapabilities(target.channelId);
     if (!capabilities.media) {
       this.logger.warn("channel media send skipped", {
-        channel: target.channelId,
+        ...deliveryLogMeta(target),
         media: media.path ?? media.url ?? media.name,
         reason: "media unsupported",
       });
@@ -170,11 +338,91 @@ export class BridgeDelivery {
       return true;
     } catch (error) {
       this.logger.warn("channel media send failed", {
-        channel: target.channelId,
+        ...deliveryLogMeta(target),
         media: media.path ?? media.url ?? media.name,
         error: error instanceof Error ? error.message : String(error),
       });
       return false;
     }
   }
+}
+
+function deliveryLogMeta(target: ChannelTarget): Record<string, unknown> {
+  return {
+    channel: target.channelId,
+    routeKey: target.routeKey,
+    account: target.accountId,
+    conversationKind: target.conversation.kind,
+    conversationId: target.conversation.id,
+  };
+}
+
+function deliveryTextPreview(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 160) return normalized;
+  return `${normalized.slice(0, 157)}...`;
+}
+
+function formatProgressDeliveryFailureText(text: string, error: string): string {
+  return [
+    "发送失败，未投递到聊天渠道。",
+    text,
+    "",
+    `错误: ${error}`,
+  ].join("\n");
+}
+
+function formatProgressDeliverySuppressedText(text: string, input: { reason?: string; cooldownMs: number }): string {
+  return [
+    "发送暂缓，未投递到聊天渠道。",
+    `原因: 前一次进度投递失败，当前处于 ${Math.ceil(input.cooldownMs / 1000)}s 冷却期。`,
+    input.reason ? `上次错误: ${input.reason}` : undefined,
+    text,
+  ].filter((line): line is string => line !== undefined).join("\n");
+}
+
+function formatCommentaryDeliveryFailureText(text: string, error: string): string {
+  return [
+    "旁白发送失败，未投递到聊天渠道。",
+    text,
+    "",
+    `错误: ${error}`,
+  ].join("\n");
+}
+
+function formatCommentaryDeliverySuppressedText(text: string, input: { reason?: string; cooldownMs: number }): string {
+  return [
+    "旁白发送暂缓，未投递到聊天渠道。",
+    `原因: 前一次旁白投递失败，当前处于 ${Math.ceil(input.cooldownMs / 1000)}s 冷却期。`,
+    input.reason ? `上次错误: ${input.reason}` : undefined,
+    text,
+  ].filter((line): line is string => line !== undefined).join("\n");
+}
+
+function formatToolProgressDeliveryFailureText(progress: ChannelToolProgress, error: string): string {
+  return [
+    "工具进度发送失败，未投递到聊天渠道。",
+    formatToolProgressBody(progress),
+    "",
+    `错误: ${error}`,
+  ].join("\n");
+}
+
+function formatToolProgressDeliverySuppressedText(progress: ChannelToolProgress, input: { reason?: string; cooldownMs: number }): string {
+  return [
+    "工具进度发送暂缓，未投递到聊天渠道。",
+    `原因: 前一次进度投递失败，当前处于 ${Math.ceil(input.cooldownMs / 1000)}s 冷却期。`,
+    input.reason ? `上次错误: ${input.reason}` : undefined,
+    formatToolProgressBody(progress),
+  ].filter((line): line is string => line !== undefined).join("\n");
+}
+
+function formatToolProgressBody(progress: ChannelToolProgress): string {
+  return [
+    "工具进度:",
+    `工具: ${progress.toolName}`,
+    `阶段: ${progress.phase === "start" ? "开始" : "结束"}`,
+    progress.status ? `状态: ${progress.status}` : undefined,
+    progress.toolCallId ? `调用 ID: ${progress.toolCallId}` : undefined,
+  ].filter((line): line is string => line !== undefined).join("\n");
 }

@@ -77,6 +77,10 @@ export interface BackgroundTurnState {
   target: ChannelTarget;
   finalText: string;
   finalPlanText: string;
+  lastCommentaryText: string;
+  lastDeliveredCommentaryText: string;
+  typingTimer?: ReturnType<typeof setTimeout>;
+  stopTyping?: () => void;
 }
 
 export interface SessionChoice {
@@ -132,7 +136,7 @@ export type InitialRouteBinding =
   | { type: "existing"; sessionId: string }
   | { type: "new" };
 
-export type ProgressDeliveryMode = "brief" | "detailed" | "silent";
+export type ProgressDeliveryMode = "brief" | "detailed" | "realtime" | "tools" | "silent";
 export type RouteTrustMode = "disabled" | "pairing_required" | "real_channels";
 export type UnboundRoutePolicy = "auto_new" | "ask";
 
