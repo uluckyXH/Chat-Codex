@@ -170,6 +170,7 @@ export interface CodexToolProgress {
 export type CodexEvent =
   | { type: "turn.started"; sessionId: string; turnId: string; startedAt?: string }
   | { type: "assistant.progress"; sessionId: string; turnId: string; text: string; kind?: CodexProgressKind }
+  | { type: "assistant.commentary"; sessionId: string; turnId: string; text: string; itemId?: string }
   | { type: "tool.progress"; sessionId: string; turnId: string; progress: CodexToolProgress }
   | { type: "codex.notification"; sessionId: string; turnId: string; notification: CodexNotification }
   | { type: "assistant.plan"; sessionId: string; turnId: string; text: string }

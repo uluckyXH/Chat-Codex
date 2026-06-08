@@ -4,6 +4,7 @@ import type { ProgressDeliveryMode } from "../bridge-types.js";
 import type { BridgeDelivery } from "../delivery.js";
 import type { BridgeStatusText } from "../status-text.js";
 import { parseProgressDeliveryMode } from "../formatters.js";
+import { formatProgressModeChoices, isProgressModeAllowedByPolicy } from "../progress-modes.js";
 
 export interface ProgressCommandOptions {
   delivery: BridgeDelivery;
@@ -24,11 +25,7 @@ export async function handleProgressModeCommand(
     return;
   }
   const mode = parseProgressDeliveryMode(rawMode);
-  if (!mode) {
-    await options.delivery.sendText(target, progressModeErrorText(policy));
-    return;
-  }
-  if (mode === "tools" && policy.toolProgress !== "send") {
+  if (!mode || !isProgressModeAllowedByPolicy(mode, policy)) {
     await options.delivery.sendText(target, progressModeErrorText(policy));
     return;
   }
@@ -37,7 +34,5 @@ export async function handleProgressModeCommand(
 }
 
 function progressModeErrorText(policy: ChannelDeliveryPolicy): string {
-  return policy.toolProgress === "send"
-    ? "未知进度模式。可用值: brief, detailed, tools, silent。"
-    : "未知进度模式。可用值: brief, detailed, silent。";
+  return `未知进度模式。可用值: ${formatProgressModeChoices(policy, ", ")}。`;
 }

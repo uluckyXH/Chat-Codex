@@ -16,6 +16,7 @@ export interface BridgeProgressDeliveryOptions {
     routeKey: string,
     kind: CodexProgressKind | undefined,
   ): boolean;
+  isRealtimeProgress?(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
 }
 
 export interface BridgeProgressInput {
@@ -35,6 +36,7 @@ interface RouteProgressState {
   lastSentAt?: number;
   recent: string[];
   pending?: PendingProgress;
+  flushTimer?: ReturnType<typeof setTimeout>;
 }
 
 const DEFAULT_MIN_INTERVAL_MS = 3000;
@@ -49,6 +51,7 @@ export class BridgeProgressDelivery {
   private readonly maxProgressChars: number;
   private readonly now: () => number;
   private readonly shouldDeliverProgress: BridgeProgressDeliveryOptions["shouldDeliverProgress"];
+  private readonly isRealtimeProgress: NonNullable<BridgeProgressDeliveryOptions["isRealtimeProgress"]>;
   private readonly routes = new Map<string, RouteProgressState>();
 
   constructor(options: BridgeProgressDeliveryOptions) {
@@ -58,6 +61,7 @@ export class BridgeProgressDelivery {
     this.maxProgressChars = Math.max(120, options.maxProgressChars ?? DEFAULT_MAX_PROGRESS_CHARS);
     this.now = options.now ?? (() => Date.now());
     this.shouldDeliverProgress = options.shouldDeliverProgress;
+    this.isRealtimeProgress = options.isRealtimeProgress ?? (() => false);
   }
 
   async handleProgress(input: BridgeProgressInput): Promise<void> {
@@ -72,10 +76,17 @@ export class BridgeProgressDelivery {
       return;
     }
 
+    if (this.isRealtimeProgress(input.policy, input.routeKey)) {
+      this.recordObservedProgress(input.target, body);
+      await this.delivery.sendRealtimeProgressText(input.routeKey, input.target, body);
+      return;
+    }
+
     const state = this.stateFor(input.routeKey);
     const normalized = normalizeProgressText(body);
     if (this.hasRecent(state, normalized)) return;
     this.rememberRecent(state, normalized);
+    this.recordObservedProgress(input.target, body);
 
     const now = this.now();
     if (!state.pending && (state.lastSentAt === undefined || now - state.lastSentAt >= this.minIntervalMs)) {
@@ -84,6 +95,8 @@ export class BridgeProgressDelivery {
     }
 
     state.pending = mergePending(state.pending, input.target, body);
+    if (await this.flushIfDue(input.routeKey, state)) return;
+    this.scheduleFlush(input.routeKey, state);
   }
 
   async flushRoute(routeKey: string): Promise<void> {
@@ -91,14 +104,18 @@ export class BridgeProgressDelivery {
     const pending = state?.pending;
     if (!state || !pending) return;
     state.pending = undefined;
+    clearFlushTimer(state);
     await this.sendNow(routeKey, pending.target, pending.texts, this.now());
   }
 
   clearRoute(routeKey: string): void {
+    const state = this.routes.get(routeKey);
+    if (state) clearFlushTimer(state);
     this.routes.delete(routeKey);
   }
 
   clearAll(): void {
+    for (const state of this.routes.values()) clearFlushTimer(state);
     this.routes.clear();
   }
 
@@ -114,6 +131,37 @@ export class BridgeProgressDelivery {
     const state = this.stateFor(routeKey);
     state.lastSentAt = sentAt;
     await this.delivery.sendProgressText(routeKey, target, this.formatProgress(texts));
+  }
+
+  private async flushIfDue(routeKey: string, state: RouteProgressState): Promise<boolean> {
+    const pending = state.pending;
+    if (!pending) return false;
+    const now = this.now();
+    if (state.lastSentAt !== undefined && now - state.lastSentAt < this.minIntervalMs) return false;
+    state.pending = undefined;
+    clearFlushTimer(state);
+    await this.sendNow(routeKey, pending.target, pending.texts, now);
+    return true;
+  }
+
+  private scheduleFlush(routeKey: string, state: RouteProgressState): void {
+    if (!state.pending || state.flushTimer) return;
+    const delay = progressFlushDelay(this.now(), state.lastSentAt, this.minIntervalMs);
+    const timer = setTimeout(() => {
+      const current = this.routes.get(routeKey);
+      if (current) current.flushTimer = undefined;
+      void this.flushRoute(routeKey);
+    }, delay);
+    state.flushTimer = timer;
+    unrefTimer(timer);
+  }
+
+  private recordObservedProgress(target: ChannelTarget, text: string): void {
+    if (this.transcript?.observedProgress) {
+      this.transcript.observedProgress(target, text);
+      return;
+    }
+    this.transcript?.localProgress?.(target, text);
   }
 
   private formatProgress(texts: string[]): string {
@@ -144,4 +192,20 @@ function normalizeProgressText(text: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function progressFlushDelay(now: number, lastSentAt: number | undefined, minIntervalMs: number): number {
+  if (lastSentAt === undefined) return 0;
+  return Math.max(0, minIntervalMs - (now - lastSentAt));
+}
+
+function clearFlushTimer(state: RouteProgressState): void {
+  if (!state.flushTimer) return;
+  clearTimeout(state.flushTimer);
+  state.flushTimer = undefined;
+}
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  if (typeof timer !== "object" || timer === null || !("unref" in timer)) return;
+  (timer as { unref?: () => void }).unref?.();
 }

@@ -107,17 +107,16 @@ Chat-Codex 当前微信发送参数：
 
 1. 微信兼容 Chat-Codex 已有的普通文本进度模式：
    - `/progress brief`
-   - `/progress detailed`
    - `/progress silent`
-2. 微信额外支持 2.4.4 结构化工具进度：
+2. 微信保留 2.4.4 结构化工具进度内部能力，但不通过普通 `/progress tools` 暴露：
    - 工具开始：`TOOL_CALL_START`
    - 工具结束：`TOOL_CALL_RESULT`
-3. `/plan` turn 可按 Chat-Codex 产品策略使用 turn 级 detailed effective mode，但不修改 route 持久化 `/progress` 配置。
+3. `/plan` turn 可按 Chat-Codex 产品策略默认低频展示 Codex 旁白和最终计划，但不修改 route 持久化 `/progress` 配置，也不打开命令/工具进度或 realtime。
 4. 最终回复、审批、`request_user_input`、安全通知继续按普通文本投递。
 
 理由：
 
-- `brief/detailed` 是 Chat-Codex 既有普通文本进度能力；微信需要兼容这两档，才能实测普通消息投递是否还会被限制。
+- `brief` 是 Chat-Codex 当前公开的普通文本摘要进度能力；`detailed` 仅保留为内部/历史能力。
 - 结构化工具进度是微信 2.4.4 专门新增的能力，可以和普通文本进度并行实验。
 - `/plan` 不只有最终结果，规划过程本身是用户需要看的内容；但这属于 Chat-Codex 交互策略，不是微信协议要求，微信能否稳定承载 detailed 文本过程仍需实测。
 
@@ -184,7 +183,7 @@ sendToolProgress(target, {
 - 5 秒节奏仍由 Bridge 层现有 typing tick 决定，不新增全局渠道配置。
 - 微信 adapter 负责用 `typing_ticket` 发送 `sendtyping(status=typing)`。
 - `getConfig(context_token)` 只用于获取 `typing_ticket`。OpenClaw 2.4.4 发布包对 `getConfig` 做 per-user cache，并不是 5 秒强制刷新。
-- 如果保留主动 `getConfig` 探测实验，建议放在微信 adapter 内部并限流为最多每 10 秒一次，不新增 Bridge 全局 tick，不影响其它渠道，也不写成协议结论。
+- 如果保留主动 `getConfig` 探测实验，建议放在微信 adapter 内部并限流为最多每 30 秒一次，不新增 Bridge 全局 tick，不影响其它渠道，也不写成协议结论。
 
 ### 阶段 5：Delivery Policy
 
@@ -207,7 +206,7 @@ toolProgress?: "send" | "suppress"
 }
 ```
 
-这里的 `progress: "send"` 只表示微信允许普通文本进度进入现有 `/progress` 过滤器；route 当前模式决定是否真正发送。默认持久模式如果是 `tools`，普通文本进度仍不发送。
+这里的 `progress: "send"` 只表示微信允许普通文本进度进入现有 `/progress` 过滤器；route 当前模式决定是否真正发送。当前微信公开模式只有 `silent/brief`，默认持久模式为 `silent`。
 
 非微信渠道不需要理解微信 `TOOL_CALL_START/RESULT`。如果把 `toolProgress` 放进通用策略，非微信默认应保持 `undefined` 或 `suppress`，现有普通文本 progress 行为不变。
 
@@ -215,61 +214,51 @@ toolProgress?: "send" | "suppress"
 
 ### 阶段 6：开关设计
 
-微信需要复用现有 `/progress brief|detailed|silent`，并新增一个微信专属 `tools` 模式。
+微信最初计划复用 `/progress brief|detailed|silent` 并新增 `tools` 模式。真实通道验证后，用户可见模式收敛为 `/progress silent|brief`：`realtime` 会触发 `ret=-2` 或消息堆积，`detailed` 在微信里仍只看到少量节流合并后的消息，`tools` 如果客户端没有特殊 UI 展示则用户价值不明确。
 
 命令设计：
 
 ```text
 /progress brief
-/progress detailed
-/progress tools
 /progress silent
 ```
 
 含义：
 
 - `/progress brief`：投递摘要文本进度，和 Chat-Codex 现有 brief 语义一致。
-- `/progress detailed`：投递完整文本进度和微信 2.4.4 结构化工具生命周期；文本进度包含命令/工具开始、完成、失败和输出摘要，不投递无限制原始 stdout/stderr。
-- `/progress tools`：投递微信 2.4.4 结构化工具生命周期事件；当前实现同时发送 `TOOL_CALL_START` 和 `TOOL_CALL_RESULT`，不携带命令/工具输出摘要。
 - `/progress silent`：不投递进度，只保留最终回复和关键交互。
 
-默认值建议为 `/progress tools`，因为 2.4.4 已提供结构化工具进度，噪声可控。
-
-需要完整测试时，用户可以显式切到 `/progress brief` 或 `/progress detailed`。
+默认值保持 `/progress silent`。需要聊天渠道看到进度时，用户显式切到 `/progress brief`。需要完整本地细节时看 TUI / transcript。
 
 边界：
 
-- `detailed` 是完整模式：普通文本详细进度用于看工具/命令做了什么和输出摘要是什么，微信结构化 item 用于展示工具生命周期。
-- `tools` 是结构化工具状态模式：用于让微信端聚合展示工具生命周期，不承载 stdout/stderr 摘要。
+- `detailed` 和 `tools` 保留内部/历史能力，但不再通过普通 `/progress` 暴露。
 - `brief` 是摘要文本模式，第一版不默认叠加结构化工具生命周期，除非后续实测证明消息量可控。
 - `silent` 同时关闭普通文本进度和结构化工具生命周期。
-- Plan turn effective detailed 同样应同时投递文本过程和结构化生命周期。
+- Plan turn 默认旁白可见，但不自动投递命令/工具细节和结构化生命周期。
 
 | 模式 | 普通文本进度 | 结构化工具生命周期 |
 | --- | --- | --- |
-| `/progress tools` | 不投递 | 投递 |
-| `/progress detailed` | 投递完整文本进度和输出摘要 | 投递 |
 | `/progress brief` | 投递摘要文本进度 | 默认不投递 |
 | `/progress silent` | 不投递 | 不投递 |
 
 ### 阶段 7：/plan 下的投递策略
 
-`/plan` 只切换 Codex collaboration mode，不自动改变微信 `/progress` 持久化配置；但 Chat-Codex 可以把该 Plan turn 的 effective progress mode 临时设为 `detailed`。
+`/plan` 只切换 Codex collaboration mode，不自动改变微信 `/progress` 持久化配置。Chat-Codex 在 Plan mode 下默认低频投递 Codex `assistant.commentary` 旁白和最终 `assistant.plan`，但不把该 turn 临时提升为 detailed。
 
-这是产品交互策略，不是微信 2.4.4 协议要求。微信默认持久模式保持最低噪声，使用 `/progress silent`；需要实验结构化工具生命周期时再手动切到 `/progress tools`。
+这是产品交互策略，不是微信 2.4.4 协议要求。微信默认持久模式保持最低噪声，使用 `/progress silent`；结构化工具生命周期保留内部能力，不再通过普通 `/progress tools` 切换。
 
 规则：
 
 - `assistant.plan` 最终计划必须投递。
-- `turn/plan/updated`、`item/plan/delta`、搜索、文件变更、命令/工具进度应按 Plan turn 的 detailed 语义投递，其中命令/工具输出摘要和结构化工具生命周期都要投递。
-- reasoning summary 需要继续受限流/聚合约束，避免微信刷屏；必要时只投递低频摘要。
-- 当前 route 是 `/progress tools` 时，Plan turn 仍按 effective detailed 投递文本过程消息和结构化工具进度。
+- `assistant.commentary` 旁白在 Plan mode 下默认低频投递。
+- 普通 reasoning、搜索、文件变更仍按 route `/progress` 模式处理；命令/工具输出摘要和结构化工具生命周期不因 Plan mode 自动打开。
 - `/plan` 不写入 route progress mode；Plan turn 结束后恢复用户原来的进度配置。
 
 可选低频提示：
 
 ```text
-已进入计划模式。本轮计划过程会完整投递；这不会修改当前 /progress 配置。
+已进入计划模式。本轮会低频展示 Codex 旁白；这不会修改当前 /progress 配置。
 ```
 
 ## 风险和边界
@@ -279,7 +268,7 @@ toolProgress?: "send" | "suppress"
 - 工具开始和工具结束可能乱序或丢失，发送层必须容忍失败；失败不能影响 Codex turn。
 - 结构化工具进度发送失败后，应进入短暂 suppress/backoff，避免反复报错。
 - 没有 `context_token` 时可以发送，但需要观察微信端是否能正确聚合显示。
-- `getConfig` 不应被当成 `context_token` 续期接口；最多每 10 秒主动调用只能作为实验。
+- `getConfig` 不应被当成 `context_token` 续期接口；最多每 30 秒主动调用只能作为 typing 取票链路探测。
 - `run_id` 推荐 UUID；使用 Codex `turnId` 派生时需要保留快速回退。
 - 群聊场景下仍按当前微信群聊能力边界处理；本文不扩大微信群聊支持范围。
 
@@ -293,13 +282,11 @@ toolProgress?: "send" | "suppress"
 - `sendToolProgress` 构造 `TOOL_CALL_START` 和 `TOOL_CALL_RESULT` 请求体。
 - app-server `item/started` / `item/completed` 能产出内部工具生命周期事件，不依赖 `assistant.progress.text` 解析。
 - background/Goal turn 能持续 5 秒 typing keepalive，并在完成、失败、`/stop` 时停止。
-- 普通文本进度不再被微信 delivery policy 一刀切抑制，按 `/progress brief|detailed|silent` 和 Plan turn effective mode 投递。
-- 微信 `/progress brief/detailed/silent/tools` 能正确切换。
-- 微信 `/progress detailed` 能投递命令/工具开始、完成、失败和输出摘要。
-- 微信 `/progress detailed` 能同时投递结构化工具生命周期。
-- 微信 `/progress tools` 只投递结构化工具生命周期，不携带文本输出摘要。
-- Plan turn 不修改 route progress mode，但 effective mode 为 detailed。
-- Plan turn detailed 包含工具/命令输出摘要和结构化工具生命周期。
+- 普通文本进度不再被微信 delivery policy 一刀切抑制，按 `/progress silent|brief` 投递；Plan mode 只额外默认展示旁白；`/progress realtime/detailed/tools` 在微信中返回可用值错误。
+- 微信 `/progress silent/brief` 能正确切换。
+- 微信 `/progress brief` 能投递摘要普通文本进度，且不发送结构化工具生命周期。
+- Plan turn 不修改 route progress mode，但默认投递 `assistant.commentary` 旁白。
+- Plan turn 不自动投递工具/命令输出摘要和结构化工具生命周期。
 - 工具结构化进度在微信策略允许时发送。
 - 发送失败不影响最终回复。
 - `getUpdates` 收到 abort 后退出轮询，不进入 degraded。
@@ -310,7 +297,7 @@ toolProgress?: "send" | "suppress"
 2. 发起一个会触发工具调用的 Codex 任务。
 3. 确认微信收到工具开始/结束结构化进度。
 4. 切 `/progress brief`，确认微信收到摘要文本进度。
-5. 切 `/progress detailed`，确认微信收到完整文本进度、命令/工具细节、输出摘要和结构化工具生命周期。
+5. 切 `/progress detailed/tools/realtime`，确认微信返回可用值错误，只展示 `silent, brief`。
 6. 切 `/plan`，确认本轮计划过程完整投递，且结束后 route progress mode 未被改写。
 7. 确认最终回复正常。
 8. `/stop` 或服务重启时，确认微信轮询能快速退出。
@@ -321,8 +308,8 @@ toolProgress?: "send" | "suppress"
 建议适配，但分阶段走：
 
 1. 先做协议兼容、UUID `run_id`、`context_token` 回传、`abortSignal`，风险低。
-2. 补齐普通 route 与 background/Goal 的 typing keepalive；`getConfig` 只作为取票接口，主动 10 秒探测只保留为实验开关。
+2. 补齐普通 route 与 background/Goal 的 typing keepalive；`getConfig` 只作为取票接口，主动 30 秒探测只保留为 adapter 内部可观测能力。
 3. 从 app-server 结构化 item 生命周期新增内部工具进度事件，再发送 `TOOL_CALL_START/RESULT`。
-4. 打开微信普通文本进度模式兼容，支持 `brief/detailed/silent/tools`；默认建议 `silent`，当前实现保留 `/progress tools` 用于发送 `TOOL_CALL_START/RESULT` 完整生命周期。
+4. 打开微信普通文本进度模式兼容，支持 `silent/brief`；默认建议 `silent`，当前实现保留结构化 `TOOL_CALL_START/RESULT` 发送代码但不作为普通 `/progress` 模式暴露。
 
 这样既能完整测试微信普通消息投递，也能验证 2.4.4 结构化工具进度是否更适合长期任务。

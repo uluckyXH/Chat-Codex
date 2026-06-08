@@ -20,6 +20,9 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 class CapturingTranscriptSink implements TranscriptSink {
   readonly inboundEvents: Array<{ message: ChannelMessage; text: string }> = [];
   readonly outboundEvents: Array<{ target: ChannelTarget; text: string }> = [];
+  readonly observedCommentaryEvents: Array<{ target: ChannelTarget; text: string }> = [];
+  readonly localCommentaryEvents: Array<{ target: ChannelTarget; text: string }> = [];
+  readonly observedProgressEvents: Array<{ target: ChannelTarget; text: string }> = [];
   readonly localProgressEvents: Array<{ target: ChannelTarget; text: string }> = [];
   readonly outboundMediaEvents: Array<{ target: ChannelTarget; media: ChannelMedia }> = [];
 
@@ -29,6 +32,18 @@ class CapturingTranscriptSink implements TranscriptSink {
 
   outbound(target: ChannelTarget, text: string): void {
     this.outboundEvents.push({ target, text });
+  }
+
+  observedCommentary(target: ChannelTarget, text: string): void {
+    this.observedCommentaryEvents.push({ target, text });
+  }
+
+  localCommentary(target: ChannelTarget, text: string): void {
+    this.localCommentaryEvents.push({ target, text });
+  }
+
+  observedProgress(target: ChannelTarget, text: string): void {
+    this.observedProgressEvents.push({ target, text });
   }
 
   localProgress(target: ChannelTarget, text: string): void {
@@ -210,6 +225,8 @@ class WeixinLikeChannelAdapter extends MockChannelAdapter {
       taskStart: "suppress",
       progress: "send",
       toolProgress: "send",
+      realtimeProgress: "suppress",
+      allowedProgressModes: ["silent", "brief"],
       progressCommand: "enabled",
       defaultProgressMode: "silent",
       refreshCommands: [
@@ -266,6 +283,47 @@ class ManyProgressCodexAdapter extends MockCodexAdapter {
     yield { type: "assistant.progress", sessionId, turnId, kind: "reasoning", text: "第二段进度。" };
     yield { type: "assistant.progress", sessionId, turnId, kind: "reasoning", text: "第三段进度。" };
     yield { type: "assistant.completed", sessionId, turnId, text: "完成" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class CommentaryCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = `commentary-turn-${Date.now()}`;
+    yield { type: "turn.started", sessionId, turnId };
+    yield { type: "assistant.commentary", sessionId, turnId, text: "我先说明一下当前计划。" };
+    yield { type: "assistant.completed", sessionId, turnId, text: "完成" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class CommentaryOnlyCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = `commentary-only-turn-${Date.now()}`;
+    yield { type: "turn.started", sessionId, turnId };
+    yield { type: "assistant.commentary", sessionId, turnId, text: "这是唯一的旁白输出。" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class PlanCommentaryCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string, _options: CodexRunOptions = {}): AsyncIterable<CodexEvent> {
+    const turnId = `plan-commentary-turn-${Date.now()}`;
+    yield { type: "turn.started", sessionId, turnId };
+    yield { type: "assistant.commentary", sessionId, turnId, text: "计划旁白: 先确认范围，再列步骤。" };
+    yield { type: "assistant.progress", sessionId, turnId, kind: "command", text: "正在执行命令: npm test" };
+    yield {
+      type: "tool.progress",
+      sessionId,
+      turnId,
+      progress: { phase: "start", itemId: "cmd-plan-1", toolName: "command: npm test" },
+    };
+    yield {
+      type: "tool.progress",
+      sessionId,
+      turnId,
+      progress: { phase: "end", itemId: "cmd-plan-1", toolName: "command: npm test", status: "completed" },
+    };
     yield { type: "turn.completed", sessionId, turnId };
   }
 }
@@ -486,6 +544,16 @@ class ProgressFailingChannelAdapter extends MockChannelAdapter {
       throw new Error("sendmessage failed: ret=-2 errcode=0");
     }
     return super.sendText(target, text);
+  }
+}
+
+class RealtimeProgressFailingChannelAdapter extends ProgressFailingChannelAdapter {
+  override getDeliveryPolicy(): ChannelDeliveryPolicy {
+    return {
+      ...super.getDeliveryPolicy(),
+      realtimeProgress: "send",
+      allowedProgressModes: ["realtime", "silent", "brief"],
+    };
   }
 }
 
@@ -982,7 +1050,7 @@ test("Bridge switches persistent collaboration mode with /plan and /code", async
   await bridge.stop();
 
   const help = channel.sentMessages.find((message) => message.text.startsWith("**可用命令**"))?.text ?? "";
-  assert.ok(help.includes("- `/plan [任务]`: 进入计划模式，或用计划模式处理任务。"));
+  assert.ok(help.includes("- `/plan [任务]`: 进入计划模式，或用计划模式处理任务；计划模式默认低频展示 Codex 旁白。"));
   assert.ok(help.includes("- `/code [任务]`: 切回默认执行模式，或用默认模式处理任务。"));
   assert.equal(help.includes("`/default`"), false);
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已进入 Plan mode")));
@@ -2264,7 +2332,7 @@ test("Bridge default progress mode suppresses command details but keeps reasonin
   assert.equal(channel.sentMessages.some((message) => message.text.includes("正在执行命令: npm test")), false);
 });
 
-test("Bridge progress command enables detailed progress for the current route", async () => {
+test("Bridge progress command rejects detailed mode on the default channel", async () => {
   const channel = new MockChannelAdapter();
   const codex = new ProgressCodexAdapter();
   const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
@@ -2275,8 +2343,9 @@ test("Bridge progress command enables detailed progress for the current route", 
   await bridge.waitForIdle();
   await bridge.stop();
 
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("当前模式: `detailed`")));
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("正在执行命令: npm test")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("可用值: silent, brief")));
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("当前模式: `detailed`")), false);
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("正在执行命令: npm test")), false);
 });
 
 test("Bridge defaults weixin to silent progress while keeping final replies", async () => {
@@ -2300,22 +2369,124 @@ test("Bridge defaults weixin to silent progress while keeping final replies", as
   assert.ok(transcript.localProgressEvents.some((event) => event.text.includes("正在执行命令: npm test")));
 });
 
-test("Bridge sends detailed text progress and tool progress on weixin detailed mode", async () => {
+test("Bridge rejects detailed and tools progress modes on weixin-like channel", async () => {
   const channel = new WeixinLikeChannelAdapter();
-  const codex = new ToolProgressCodexAdapter();
+  const codex = new MockCodexAdapter();
   const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
 
   await bridge.start();
   await channel.emitText("/progress detailed");
-  await channel.emitText("跑一个有进度的任务");
-  await bridge.waitForIdle();
+  await channel.emitText("/progress tools");
   await bridge.stop();
 
   const channelTexts = channel.sentMessages.map((message) => message.text);
-  assert.ok(channelTexts.some((text) => text.includes("当前模式: `detailed`")));
-  assert.ok(channelTexts.some((text) => text.includes("我先列一个工具调用计划。")));
-  assert.ok(channelTexts.some((text) => text.includes("正在执行命令: npm test")));
-  assert.deepEqual(channel.sentToolProgress.map((event) => event.progress.phase), ["start", "end"]);
+  assert.equal(channelTexts.filter((text) => text.includes("可用值: silent, brief")).length, 2);
+  assert.equal(channelTexts.some((text) => text.includes("当前模式: `detailed`")), false);
+  assert.equal(channelTexts.some((text) => text.includes("当前模式: `tools`")), false);
+});
+
+test("Bridge logs every brief progress locally while keeping weixin channel throttled", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new ManyProgressCodexAdapter();
+  const transcript = new CapturingTranscriptSink();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), transcript });
+
+  await bridge.start();
+  await channel.emitText("/progress brief");
+  await channel.emitText("跑一个高频摘要进度任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(transcript.observedProgressEvents.map((event) => event.text), [
+    "第一段进度。",
+    "第二段进度。",
+    "第三段进度。",
+  ]);
+  const progressTexts = channel.sentMessages
+    .map((message) => message.text)
+    .filter((text) => text.includes("段进度。"));
+  assert.equal(progressTexts.length, 2);
+  assert.equal(progressTexts[0], "第一段进度。");
+  assert.match(progressTexts[1] ?? "", /第二段进度。/);
+  assert.match(progressTexts[1] ?? "", /第三段进度。/);
+});
+
+test("Bridge sends commentary in weixin brief mode independently from progress", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new CommentaryCodexAdapter();
+  const transcript = new CapturingTranscriptSink();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), transcript });
+
+  await bridge.start();
+  await channel.emitText("/progress brief");
+  await channel.emitText("跑一个旁白任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  const texts = channel.sentMessages.map((message) => message.text);
+  assert.ok(texts.some((text) => text.includes("我先说明一下当前计划。")));
+  assert.ok(texts.some((text) => text === "完成"));
+  assert.deepEqual(transcript.observedCommentaryEvents.map((event) => event.text), ["我先说明一下当前计划。"]);
+  assert.deepEqual(transcript.observedProgressEvents.map((event) => event.text), []);
+});
+
+test("Bridge falls back commentary-only output to final text on weixin silent mode", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new CommentaryOnlyCodexAdapter();
+  const transcript = new CapturingTranscriptSink();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), transcript });
+
+  await bridge.start();
+  await channel.emitText("跑一个只有旁白的任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  const commentaryTexts = channel.sentMessages
+    .map((message) => message.text)
+    .filter((text) => text.includes("这是唯一的旁白输出。"));
+  assert.deepEqual(commentaryTexts, ["这是唯一的旁白输出。"]);
+  assert.deepEqual(transcript.localCommentaryEvents.map((event) => event.text), ["这是唯一的旁白输出。"]);
+});
+
+test("Bridge sends plan commentary on weixin default silent mode without command progress", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new PlanCommentaryCodexAdapter();
+  const transcript = new CapturingTranscriptSink();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), transcript });
+
+  await bridge.start();
+  await channel.emitText("/plan 请规划旁白投递");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  const texts = channel.sentMessages.map((message) => message.text);
+  const commentaryTexts = texts.filter((text) => text.includes("计划旁白: 先确认范围，再列步骤。"));
+  assert.deepEqual(commentaryTexts, ["计划旁白: 先确认范围，再列步骤。"]);
+  assert.equal(texts.some((text) => text.includes("正在执行命令: npm test")), false);
+  assert.equal(channel.sentToolProgress.length, 0);
+  assert.deepEqual(transcript.observedCommentaryEvents.map((event) => event.text), ["计划旁白: 先确认范围，再列步骤。"]);
+  assert.deepEqual(transcript.localProgressEvents.map((event) => event.text), ["正在执行命令: npm test"]);
+});
+
+test("Bridge rejects realtime progress mode on weixin-like channel", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new ManyProgressCodexAdapter();
+  const transcript = new CapturingTranscriptSink();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), transcript });
+
+  await bridge.start();
+  await channel.emitText("/progress realtime");
+  await channel.emitText("跑一个实时进度任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  const progressTexts = channel.sentMessages
+    .map((message) => message.text)
+    .filter((text) => text.includes("段进度。"));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("可用值: silent, brief")));
+  assert.equal(channel.sentMessages.some((message) => message.text.includes("当前模式: `realtime`")), false);
+  assert.deepEqual(progressTexts, []);
+  assert.deepEqual(transcript.observedProgressEvents.map((event) => event.text), []);
 });
 
 test("Bridge sends brief text progress without tool progress on weixin brief mode", async () => {
@@ -2395,7 +2566,7 @@ test("Bridge uses delivery policy instead of channel id for progress suppression
   assert.ok(texts.some((text) => text.includes("我先列一个简短计划")));
 });
 
-test("Bridge still sends errors on weixin tools mode", async () => {
+test("Bridge still sends errors on weixin silent mode", async () => {
   const channel = new WeixinLikeChannelAdapter();
   const codex = new FailedTurnCodexAdapter();
   const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
@@ -2462,12 +2633,12 @@ test("Bridge accepts progress command and silently accepts /fff on weixin", asyn
   const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
 
   await bridge.start();
-  await channel.emitText("/progress detailed");
+  await channel.emitText("/progress brief");
   await channel.emitText("/fff");
   await bridge.stop();
 
   assert.equal(channel.sentMessages.length, 1);
-  assert.match(channel.sentMessages[0].text, /当前模式: `detailed`/);
+  assert.match(channel.sentMessages[0].text, /当前模式: `brief`/);
 });
 
 test("Bridge reports silent progress in weixin status", async () => {
@@ -2482,7 +2653,7 @@ test("Bridge reports silent progress in weixin status", async () => {
   assert.match(channel.sentMessages[0].text, /进度投递: 静默模式/);
 });
 
-test("Bridge shows tools progress command and /fff in weixin help", async () => {
+test("Bridge shows simplified progress command and /fff in weixin help", async () => {
   const channel = new WeixinLikeChannelAdapter();
   const codex = new MockCodexAdapter();
   const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
@@ -2492,7 +2663,10 @@ test("Bridge shows tools progress command and /fff in weixin help", async () => 
   await bridge.stop();
 
   const help = channel.sentMessages[0].text;
-  assert.ok(help.includes("`/progress [brief|detailed|tools|silent]`"));
+  assert.ok(help.includes("`/progress [silent|brief]`"));
+  assert.equal(help.includes("`realtime`"), false);
+  assert.equal(help.includes("`detailed`"), false);
+  assert.equal(help.includes("`tools`"), false);
   assert.ok(help.includes("- `/context-refresh [off|detect|reload|inherit]`:"));
   assert.ok(help.includes("  - `/context-refresh reload`: 发现本机 session 外部更新时先重新加载当前 session，再发送。"));
   assert.ok(help.includes("- `/fff`:"));
@@ -2509,6 +2683,21 @@ test("Bridge suppresses progress sends briefly after a channel progress failure"
   await bridge.stop();
 
   assert.equal(channel.progressAttempts, 1);
+  assert.ok(channel.sentMessages.some((message) => message.text === "完成"));
+});
+
+test("Bridge does not cooldown failed realtime progress sends on realtime-capable channel", async () => {
+  const channel = new RealtimeProgressFailingChannelAdapter();
+  const codex = new ManyProgressCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/progress realtime");
+  await channel.emitText("跑一个失败但实时的多进度任务");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.equal(channel.progressAttempts, 3);
   assert.ok(channel.sentMessages.some((message) => message.text === "完成"));
 });
 

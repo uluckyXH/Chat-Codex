@@ -1,5 +1,7 @@
 # Codex 进度噪声控制设计
 
+> 2026-06-08 更新：普通 `/progress` 用户可见模式已精简。微信只公开 `silent/brief`，飞书公开 `realtime/silent/brief`；本文中关于 `/progress detailed` 的内容保留为历史设计背景和内部能力说明，不再代表当前用户可见命令。
+
 ## 背景
 
 Chat-Codex 会把 Codex app-server 的阶段性事件转成微信、飞书或 TUI 里的进度消息。这个机制对长任务很重要，但 Codex 在执行某些命令时会产生大量中间输出：
@@ -17,9 +19,9 @@ Chat-Codex 会把 Codex app-server 的阶段性事件转成微信、飞书或 TU
 ```text
 Codex app-server notification
   -> AppServerTurnController
-  -> CodexEvent assistant.progress
+  -> CodexEvent assistant.progress / assistant.commentary
   -> BridgeRouteQueue / BridgeBackgroundTurns
-  -> BridgeDelivery.sendProgressText
+  -> BridgeProgressDelivery / BridgeCommentaryDelivery
   -> ChannelRegistry.sendText
   -> 微信 / 飞书 / Mock / TUI transcript
 ```
@@ -27,13 +29,14 @@ Codex app-server notification
 关键实现位置：
 
 - `src/codex/app-server/turn-controller.ts`
-  - `item/reasoning/summaryTextDelta` 和 commentary `item/agentMessage/delta` 已进入草稿缓冲。
+  - `item/reasoning/summaryTextDelta` 和 commentary `item/agentMessage/delta` 已进入草稿缓冲；commentary flush 后产出独立 `assistant.commentary`。
   - `item/commandExecution/outputDelta` 目前会把每个 delta 直接推成 `assistant.progress`，这是命令长输出刷屏的主要风险点。
 - `src/codex/app-server/notification-mapper.ts`
   - `progressFromThreadItem()` 会在 `commandExecution` 完成时读取 `aggregatedOutput` 并生成命令完成进度。
   - `shouldFlushProgressDraft()` 当前遇到换行就 flush，长等待输出或频繁换行的状态文本也可能被高频投递。
 - `src/bridge/route-queue.ts` 和 `src/bridge/background-turns.ts`
   - 收到 `assistant.progress` 后按 `/progress` 模式和渠道 policy 决定是否发送。
+  - 收到 `assistant.commentary` 后按独立旁白策略投递；Plan mode 默认可见，commentary-only 可兜底为最终回复。
 - `src/bridge/delivery.ts`
   - 只有发送失败后的 cooldown，没有正常情况下的频率限制、合并窗口或低信息过滤。
 
@@ -151,7 +154,7 @@ item/commandExecution/outputDelta.delta
 
 ### 不建议强行识别
 
-reasoning/commentary 是 Codex 主动给用户看的工作说明，不能简单按“长”或“频繁”删除。它们应该走缓冲、去重、节流，而不是直接归类为噪声。
+reasoning/commentary 是 Codex 主动给用户看的工作说明，不能简单按“长”或“频繁”删除。reasoning 仍走普通进度缓冲、去重、节流；commentary 已拆为独立旁白事件，走独立投递和兜底规则，而不是直接归类为噪声。
 
 ## 目标
 

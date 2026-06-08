@@ -252,7 +252,7 @@ Codex app-server 内部 thread 状态变化
 
 - mock app-server 发安全通知，Bridge 投递到当前 route。
 - mock app-server 发 archive/close，后续普通消息触发 unbound route policy。
-- 微信 `tools` 或 `silent` 等进度模式下，安全通知仍完整发送。
+- 微信 `silent/brief` 等进度模式下，安全通知仍完整发送。
 - 飞书群聊中，安全通知发送到当前群 route，不触发权限变更。
 
 ### 手工验证

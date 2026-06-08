@@ -24,6 +24,8 @@ export class BridgeDelivery {
   private readonly approvalSendRetryDelayMs: number;
   private readonly textProgressSendSuppressedUntil = new Map<string, number>();
   private readonly textProgressSendSuppressionReason = new Map<string, string>();
+  private readonly commentarySendSuppressedUntil = new Map<string, number>();
+  private readonly commentarySendSuppressionReason = new Map<string, string>();
   private readonly toolProgressSendSuppressedUntil = new Map<string, number>();
   private readonly toolProgressSendSuppressionReason = new Map<string, string>();
 
@@ -107,6 +109,114 @@ export class BridgeDelivery {
         cooldownMs: PROGRESS_SEND_FAILURE_COOLDOWN_MS,
       });
       this.transcript?.localProgress?.(target, formatProgressDeliveryFailureText(text, errorText));
+    }
+  }
+
+  async sendRealtimeProgressText(routeKey: string, target: ChannelTarget, text: string): Promise<void> {
+    const meta = {
+      ...deliveryLogMeta(target),
+      routeKey,
+      messageChars: text.length,
+      preview: deliveryTextPreview(text),
+    };
+    try {
+      await this.channels.sendText(target, text);
+      if (this.transcript?.outboundProgress) {
+        this.transcript.outboundProgress(target, text);
+      } else {
+        this.transcript?.outbound(target, text);
+      }
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      this.logger.warn("realtime progress message send failed", {
+        ...meta,
+        error: errorText,
+      });
+      this.transcript?.localProgress?.(target, formatProgressDeliveryFailureText(text, errorText));
+    }
+  }
+
+  async sendCommentaryText(routeKey: string, target: ChannelTarget, text: string): Promise<boolean> {
+    const suppressedUntil = this.commentarySendSuppressedUntil.get(routeKey) ?? 0;
+    if (Date.now() < suppressedUntil) {
+      const localText = formatCommentaryDeliverySuppressedText(text, {
+        reason: this.commentarySendSuppressionReason.get(routeKey),
+        cooldownMs: Math.max(0, suppressedUntil - Date.now()),
+      });
+      if (this.transcript?.localCommentary) {
+        this.transcript.localCommentary(target, localText);
+      } else {
+        this.transcript?.localProgress?.(target, localText);
+      }
+      return false;
+    }
+    const meta = {
+      ...deliveryLogMeta(target),
+      routeKey,
+      messageChars: text.length,
+      preview: deliveryTextPreview(text),
+    };
+    try {
+      await this.channels.sendText(target, text);
+      if (this.transcript?.outboundCommentary) {
+        this.transcript.outboundCommentary(target, text);
+      } else if (this.transcript?.outboundProgress) {
+        this.transcript.outboundProgress(target, text);
+      } else {
+        this.transcript?.outbound(target, text);
+      }
+      this.commentarySendSuppressedUntil.delete(routeKey);
+      this.commentarySendSuppressionReason.delete(routeKey);
+      return true;
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      this.commentarySendSuppressedUntil.set(routeKey, Date.now() + PROGRESS_SEND_FAILURE_COOLDOWN_MS);
+      this.commentarySendSuppressionReason.set(routeKey, errorText);
+      this.logger.warn("commentary message send failed", {
+        ...meta,
+        error: errorText,
+        cooldownMs: PROGRESS_SEND_FAILURE_COOLDOWN_MS,
+      });
+      const localText = formatCommentaryDeliveryFailureText(text, errorText);
+      if (this.transcript?.localCommentary) {
+        this.transcript.localCommentary(target, localText);
+      } else {
+        this.transcript?.localProgress?.(target, localText);
+      }
+      return false;
+    }
+  }
+
+  async sendRealtimeCommentaryText(routeKey: string, target: ChannelTarget, text: string): Promise<boolean> {
+    const meta = {
+      ...deliveryLogMeta(target),
+      routeKey,
+      messageChars: text.length,
+      preview: deliveryTextPreview(text),
+    };
+    try {
+      await this.channels.sendText(target, text);
+      if (this.transcript?.outboundCommentary) {
+        this.transcript.outboundCommentary(target, text);
+      } else if (this.transcript?.outboundProgress) {
+        this.transcript.outboundProgress(target, text);
+      } else {
+        this.transcript?.outbound(target, text);
+      }
+      return true;
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      this.logger.warn("realtime commentary message send failed", {
+        ...meta,
+        error: errorText,
+      });
+      const localText = formatCommentaryDeliveryFailureText(text, errorText);
+      if (this.transcript?.localCommentary) {
+        this.transcript.localCommentary(target, localText);
+      } else {
+        this.transcript?.localProgress?.(target, localText);
+      }
+      return false;
     }
   }
 
@@ -266,6 +376,24 @@ function formatProgressDeliverySuppressedText(text: string, input: { reason?: st
   return [
     "发送暂缓，未投递到聊天渠道。",
     `原因: 前一次进度投递失败，当前处于 ${Math.ceil(input.cooldownMs / 1000)}s 冷却期。`,
+    input.reason ? `上次错误: ${input.reason}` : undefined,
+    text,
+  ].filter((line): line is string => line !== undefined).join("\n");
+}
+
+function formatCommentaryDeliveryFailureText(text: string, error: string): string {
+  return [
+    "旁白发送失败，未投递到聊天渠道。",
+    text,
+    "",
+    `错误: ${error}`,
+  ].join("\n");
+}
+
+function formatCommentaryDeliverySuppressedText(text: string, input: { reason?: string; cooldownMs: number }): string {
+  return [
+    "旁白发送暂缓，未投递到聊天渠道。",
+    `原因: 前一次旁白投递失败，当前处于 ${Math.ceil(input.cooldownMs / 1000)}s 冷却期。`,
     input.reason ? `上次错误: ${input.reason}` : undefined,
     text,
   ].filter((line): line is string => line !== undefined).join("\n");

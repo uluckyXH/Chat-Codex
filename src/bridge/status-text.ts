@@ -38,6 +38,7 @@ import {
   formatRunPolicyForStatus,
   formatUnboundSessionForStatus,
 } from "./formatters.js";
+import { formatProgressModeChoices, isProgressModeAllowedByPolicy } from "./progress-modes.js";
 import {
   buildSessionList,
   formatSessionListPage,
@@ -278,7 +279,7 @@ export class BridgeStatusText {
       { command: "/use [session|编号]", description: "切换到已有会话；不带参数时进入编号选择。" },
       ...(isFeishuGroupMessage(message) ? [] : [{ command: "/whoami", description: "查看当前通道身份。" }]),
       { command: "/debug", description: "查看调试状态。" },
-      { command: "/plan [任务]", description: "进入计划模式，或用计划模式处理任务。" },
+      { command: "/plan [任务]", description: "进入计划模式，或用计划模式处理任务；计划模式默认低频展示 Codex 旁白。" },
       { command: "/code [任务]", description: "切回默认执行模式，或用默认模式处理任务。" },
       {
         command: "/goal [目标]",
@@ -290,14 +291,17 @@ export class BridgeStatusText {
         ],
       },
       {
-        command: deliveryPolicy.toolProgress === "send" ? "/progress [brief|detailed|tools|silent]" : "/progress [brief|detailed|silent]",
+        command: `/progress [${formatProgressModeChoices(deliveryPolicy, "|")}]`,
         description: "查看或设置当前上下文进度投递模式。",
         hideWhenProgressDisabled: true,
         details: [
-          "`brief`: 只发送计划、自言自语、搜索和文件变更摘要。",
-          "`detailed`: 发送所有可见文本进度，并在渠道支持时发送结构化工具生命周期。",
-          deliveryPolicy.toolProgress === "send" ? "`tools`: 只发送结构化工具生命周期，不发送普通文本进度。" : undefined,
-          "`silent`: 不发送进度文本和结构化工具生命周期；仍发送审批、错误、安全通知、输入请求、命令回复和最终回复。",
+          isProgressModeAllowedByPolicy("brief", deliveryPolicy) ? "`brief`: 发送 Codex 旁白、计划、搜索和文件变更摘要。" : undefined,
+          isProgressModeAllowedByPolicy("detailed", deliveryPolicy) ? "`detailed`: 发送所有可见文本进度，并在渠道支持时发送结构化工具生命周期。" : undefined,
+          isProgressModeAllowedByPolicy("realtime", deliveryPolicy)
+            ? "`realtime`: 普通文本进度逐条实时投递到聊天渠道，不做 Bridge 层节流、合并、去重、截断和失败冷却。"
+            : undefined,
+          isProgressModeAllowedByPolicy("tools", deliveryPolicy) ? "`tools`: 只发送结构化工具生命周期，不发送普通文本进度。" : undefined,
+          isProgressModeAllowedByPolicy("silent", deliveryPolicy) ? "`silent`: 不发送进度文本和结构化工具生命周期；仍发送审批、错误、安全通知、输入请求、命令回复和最终回复。" : undefined,
         ].filter((line): line is string => Boolean(line)),
       },
       { command: "/sendfile <任务内容>", description: "让 Codex 本轮按内部协议声明最终要发送的文件。" },
@@ -328,14 +332,27 @@ export class BridgeStatusText {
 
   progressModeText(routeKey: string, policy?: ChannelDeliveryPolicy): string {
     const mode = this.progressModeFor(routeKey);
-    const supportsToolProgress = policy?.toolProgress === "send";
+    const effectivePolicy = policy ?? {
+      taskStart: "send" as const,
+      progress: "send" as const,
+      realtimeProgress: "suppress" as const,
+      allowedProgressModes: ["silent", "brief"] as const,
+      progressCommand: "enabled" as const,
+      refreshCommands: [],
+    };
+    const supportsBriefProgress = isProgressModeAllowedByPolicy("brief", effectivePolicy);
+    const supportsDetailedProgress = isProgressModeAllowedByPolicy("detailed", effectivePolicy);
+    const supportsRealtimeProgress = isProgressModeAllowedByPolicy("realtime", effectivePolicy);
+    const supportsToolProgress = isProgressModeAllowedByPolicy("tools", effectivePolicy);
+    const supportsSilentProgress = isProgressModeAllowedByPolicy("silent", effectivePolicy);
     return [
       "**进度投递**",
       `- 当前模式: \`${mode}\``,
-      "- `brief`: 只发送计划、自言自语、搜索和文件变更摘要，不发送命令/工具细节。",
-      "- `detailed`: 发送所有可见文本进度，包括命令和工具调用细节；渠道支持时同时发送结构化工具生命周期。",
+      supportsBriefProgress ? "- `brief`: 发送 Codex 旁白、计划、搜索和文件变更摘要，不发送命令/工具细节。" : undefined,
+      supportsDetailedProgress ? "- `detailed`: 发送所有可见文本进度，包括命令和工具调用细节；渠道支持时同时发送结构化工具生命周期。" : undefined,
+      supportsRealtimeProgress ? "- `realtime`: 普通文本进度逐条实时投递到聊天渠道，不做 Bridge 层节流、合并、去重、截断和失败冷却；渠道支持时同时发送结构化工具生命周期。" : undefined,
       supportsToolProgress ? "- `tools`: 只发送结构化工具生命周期，不发送普通文本进度。" : undefined,
-      "- `silent`: 不发送进度文本和结构化工具生命周期；仍发送审批、错误、安全通知、输入请求、命令回复和最终回复。",
+      supportsSilentProgress ? "- `silent`: 不发送进度文本和结构化工具生命周期；仍发送审批、错误、安全通知、输入请求、命令回复和最终回复。" : undefined,
       "- 文件不会由进度模式自动发送；需要本轮允许发文件时使用 `/sendfile <任务内容>`。",
     ].filter((line): line is string => Boolean(line)).join("\n");
   }
@@ -396,6 +413,7 @@ export class BridgeStatusText {
     const mode = this.progressModeFor(routeKey);
     if (mode === "silent") return false;
     if (mode === "tools") return false;
+    if (mode === "realtime") return true;
     if (mode === "detailed") return true;
     return kind === "reasoning" || kind === "todo" || kind === "search" || kind === "file_change" || kind === "other";
   }

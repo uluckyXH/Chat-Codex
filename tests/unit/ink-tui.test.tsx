@@ -546,12 +546,20 @@ test("Runtime TUI renders startup summary and transcript logs", async () => {
     conversation: { kind: "direct", id: "oc_abc" },
     recipient: { id: "ou_abc", displayName: "张三" },
   }, "收到");
+  sink.observedProgress({
+    channelId: "feishu-default",
+    routeKey: "feishu-default:default:direct:oc_abc",
+    accountId: "default",
+    conversation: { kind: "direct", id: "oc_abc" },
+    recipient: { id: "ou_abc", displayName: "张三" },
+  }, "正在分析。");
   assert.deepEqual(store.snapshot().map((entry) => entry.source), [
     "飞书 <= 私聊:张三 | 张三",
     "飞书 <= 群聊:研发群 | 李四",
     "飞书 => 私聊:oc_abc",
+    "飞书 -- 私聊:oc_abc | 本地进度",
   ]);
-  assert.deepEqual(store.snapshot().map((entry) => entry.message), ["你好", "群消息", "收到"]);
+  assert.deepEqual(store.snapshot().map((entry) => entry.message), ["你好", "群消息", "收到", "正在分析。"]);
 
   const view = render(<RuntimeLogView summary={{
     title: `${expectedChatCodexTitle()} 运行中`,
@@ -570,9 +578,43 @@ test("Runtime TUI renders startup summary and transcript logs", async () => {
   assert.match(cleanFrame(view), /feishu-default/);
   assert.match(cleanFrame(view), /收到/);
   assert.match(cleanFrame(view), /发送/);
-  assert.match(cleanFrame(view), /群消息/);
+  assert.match(cleanFrame(view), /本地进度/);
+  assert.match(cleanFrame(view), /正在分析。/);
   assert.match(cleanFrame(view), /Ctrl\+C 停止服务/);
   assert.doesNotMatch(cleanFrame(view), /q\/Esc 停止/);
+
+  view.unmount();
+});
+
+test("Runtime TUI renders commentary transcript logs", async () => {
+  const store = new RuntimeLogStore();
+  const sink = new RuntimeTuiTranscriptSink(store);
+  sink.observedCommentary({
+    channelId: "feishu-default",
+    routeKey: "feishu-default:default:direct:oc_abc",
+    accountId: "default",
+    conversation: { kind: "direct", id: "oc_abc" },
+    recipient: { id: "ou_abc", displayName: "张三" },
+  }, "我先说明方案。");
+
+  assert.deepEqual(store.snapshot().map((entry) => entry.source), [
+    "飞书 -- 私聊:oc_abc | 本地旁白",
+  ]);
+  assert.deepEqual(store.snapshot().map((entry) => entry.message), ["我先说明方案。"]);
+
+  const view = render(<RuntimeLogView summary={{
+    title: `${expectedChatCodexTitle()} 运行中`,
+    channels: ["feishu-default"],
+    cwd: "/repo",
+    policy: { permissionMode: "approval", sandbox: "workspace-write" },
+    routePolicy: "首条消息自动创建新 session",
+    codexStatus: codexStatusFixture(),
+  }} store={store} />);
+  await waitForInk();
+
+  assert.match(cleanFrame(view), /旁白/);
+  assert.match(cleanFrame(view), /本地旁白/);
+  assert.match(cleanFrame(view), /我先说明方案。/);
 
   view.unmount();
 });

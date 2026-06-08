@@ -84,7 +84,7 @@ const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
 const SESSION_EXPIRED_ERRCODE = -14;
 const TYPING_TICKET_TTL_MS = 20 * 60 * 1000;
-const GETCONFIG_PROBE_INTERVAL_MS = 10_000;
+const GETCONFIG_PROBE_INTERVAL_MS = 30_000;
 const DEFAULT_OUTBOUND_MIN_INTERVAL_MS = 1200;
 const DEFAULT_OUTBOUND_MAX_RETRIES = 2;
 const DEFAULT_OUTBOUND_RETRY_BASE_DELAY_MS = 1500;
@@ -94,6 +94,8 @@ const WEIXIN_DELIVERY_POLICY: ChannelDeliveryPolicy = {
   taskStart: "suppress",
   progress: "send",
   toolProgress: "send",
+  realtimeProgress: "suppress",
+  allowedProgressModes: ["silent", "brief"],
   progressCommand: "enabled",
   defaultProgressMode: "silent",
   refreshCommands: [

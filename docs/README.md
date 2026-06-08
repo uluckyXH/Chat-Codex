@@ -79,6 +79,15 @@
 - `progress-noise-control-design.zh-CN.md`
   进度噪声控制设计。说明如何识别命令长输出、等待转圈、低信息增量，并通过 app-server adapter 摘要化和 Bridge delivery 限流，避免微信、飞书和 TUI 日志被进度刷屏。
 
+- `progress-local-observability-design.zh-CN.md`
+  Codex 进度本地实时可观测、渠道节流投递与 channel-aware `/progress realtime` 设计。说明如何把本地 TUI / transcript 的实时进度显示与微信、飞书聊天渠道的节流合并投递解耦；微信不开放 realtime，飞书保留 realtime，并要求实现阶段按开发规范补测试和中文测试报告。
+
+- `progress-mode-simplification-design.zh-CN.md`
+  进度模式精简设计。说明为什么用户可见 `/progress` 模式收敛为微信 `silent/brief`、飞书 `realtime/silent/brief`，并通过 `ChannelDeliveryPolicy.allowedProgressModes` 隐藏 `detailed/tools` 但保留内部能力。
+
+- `codex-commentary-delivery-design.zh-CN.md`
+  Codex `commentary` 旁白投递设计。说明为什么不能继续把旁白混进普通进度，如何新增独立 `assistant.commentary` 事件、让 `brief` 和 `/plan` 默认展示旁白，并在 README 中说明微信消息投递限制和 `/fff` 静默刷新作用。
+
 - `route-pairing-trust-design.zh-CN.md`
   渠道会话配对信任设计。说明微信/飞书新聊天 route 如何通过本机 TUI/终端配对码完成信任，未配对前不创建 session、不执行命令，只回复不含配对码的配对引导，并按 routeKey 持久化已信任聊天。
 
@@ -176,17 +185,19 @@ secrets/feishu.local.md
 17. 做 Codex `item/tool/requestUserInput`、聊天侧 `/a数字` 回答、pending input 锁或群聊发起人回答规则时读 `codex-request-user-input-design.zh-CN.md`。
 18. 做 `/sessions`、`/session`、`/sessions all`、`/resume` 或 `/use` 会话列表/选择交互时读 `session-list-pagination-design.zh-CN.md`。
 19. 做进度投递、命令输出摘要或 TUI 运行日志刷屏治理时读 `progress-noise-control-design.zh-CN.md`。
-20. 做微信/飞书新聊天配对、route 信任、未授权聊天拦截或信任持久化时读 `route-pairing-trust-design.zh-CN.md`。
-21. 做 Windows 下 Codex CLI 解析、Codex 子进程启动或传给 Codex 的本地路径适配时读 `windows-compatibility.zh-CN.md`。
-22. 做 Bridge 核心拆分时读 `bridge-modularization-design.zh-CN.md`，确认备份旧文件、模块边界、分阶段迁移和行为不变验收标准。
-23. 做 app-server adapter 或 serve 入口拆分时读 `large-core-file-modularization-design.zh-CN.md`，确认原文件改名备份、薄入口、新模块边界和逐模块测试要求。
-24. 做飞书运行日志、聊天绑定列表或群聊发言人前缀时读 `feishu-user-name-cache-design.zh-CN.md`，确认私聊 open_id 兜底、群聊手工名册和展示格式。
-25. 做 `/feishu` 飞书 skills 引导、skills 同步或后续真实飞书工具调用适配时读 `feishu-skills-command-design.zh-CN.md`。
-26. 读 `cli-interaction-redesign.zh-CN.md`，了解上一轮普通 CLI 重构背景和历史设计。
-27. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
-28. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
-29. Agent 继续读 `agent-guide.zh-CN.md`，确认执行规范。
-30. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
+20. 做 Codex 进度本地实时可见、渠道节流投递或 transcript 进度语义调整时读 `progress-local-observability-design.zh-CN.md`。
+21. 做 Codex `commentary`、旁白投递、Plan mode 旁白可见性或 commentary-only 兜底时读 `codex-commentary-delivery-design.zh-CN.md`。
+22. 做微信/飞书新聊天配对、route 信任、未授权聊天拦截或信任持久化时读 `route-pairing-trust-design.zh-CN.md`。
+23. 做 Windows 下 Codex CLI 解析、Codex 子进程启动或传给 Codex 的本地路径适配时读 `windows-compatibility.zh-CN.md`。
+24. 做 Bridge 核心拆分时读 `bridge-modularization-design.zh-CN.md`，确认备份旧文件、模块边界、分阶段迁移和行为不变验收标准。
+25. 做 app-server adapter 或 serve 入口拆分时读 `large-core-file-modularization-design.zh-CN.md`，确认原文件改名备份、薄入口、新模块边界和逐模块测试要求。
+26. 做飞书运行日志、聊天绑定列表或群聊发言人前缀时读 `feishu-user-name-cache-design.zh-CN.md`，确认私聊 open_id 兜底、群聊手工名册和展示格式。
+27. 做 `/feishu` 飞书 skills 引导、skills 同步或后续真实飞书工具调用适配时读 `feishu-skills-command-design.zh-CN.md`。
+28. 读 `cli-interaction-redesign.zh-CN.md`，了解上一轮普通 CLI 重构背景和历史设计。
+29. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
+30. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
+31. Agent 继续读 `agent-guide.zh-CN.md`，确认执行规范。
+32. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
 
 ## 分阶段工作顺序
 

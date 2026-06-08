@@ -259,7 +259,7 @@ WeixinAdapter implements ChannelAdapter
 - 登录 token 默认保存在用户状态目录 `~/.chat-codex/state/channels/weixin/...`，不写入项目目录或 Git 跟踪文件。
 - 账号 ID 会做文件名安全归一化，例如 `abc@im.bot` 归一化为 `abc-im-bot`。
 - `context_token` 会从微信入站消息带入 `ChannelTarget.context.contextToken`；文本、图片和文件发送会带回该字段，使回复尽量关联到当前微信上下文。如果带 token 的发送最终遇到 `ret=-2`，会去掉 `context_token` fallback 一次。
-- typing 使用 `getconfig` 获取 `typing_ticket`，再调用 `sendtyping`。Bridge 在 Codex 运行期间每 5 秒调用一次 typing start；微信 adapter 在自己的异步队列里复用当前有效 ticket，必要时才调用 `getconfig(context_token)` 取票，然后发送 typing，不阻塞 Codex 正常回复。`getconfig` 不视为 `context_token` 续期接口；任务完成或 `/stop` 后发送 typing stop，stop 只复用最近一次有效 ticket。
+- typing 使用 `getconfig` 获取 `typing_ticket`，再调用 `sendtyping`。Bridge 在 Codex 运行期间每 5 秒调用一次 typing start；微信 adapter 在自己的异步队列里复用当前有效 ticket，最多每 30 秒主动 probe 一次 `getconfig(context_token)` 取票，然后发送 typing，不阻塞 Codex 正常回复。`getconfig` 不视为 `context_token` 续期接口，也不作为 `sendmessage ret=-2` 的稳定性依赖；任务完成或 `/stop` 后发送 typing stop，stop 只复用最近一次有效 ticket。
 - 当前没有定时刷新 token 的协议；登录后复用服务端返回的 `bot_token`。如果 `getupdates` 返回 session 失效码 `-14`，通道状态切换为 `login_required`，停止当前轮询，等待用户重新扫码登录。旧 token 会保留，用于下一次二维码登录时作为 `local_token_list` 传给服务端识别已绑定账号。
 - `weixin status` 会读取本地账号凭证但不启动长轮询；有凭证时显示 `connected`，无凭证时显示 `login_required`。
 
@@ -391,7 +391,7 @@ busy route 下允许的命令：
 
 - 只读命令：`/help`、`/status`、`/sessions`、`/whoami`、`/debug`、`/permission`、`/model`、`/goal`。
 - 运行控制命令：`/stop`、`/OK`、`/P`、`/NO`。
-- 投递视图命令：`/progress brief|detailed|silent`，因为它只影响当前 route 的进度投递模式，不改变 Codex 执行语义。
+- 投递视图命令：`/progress silent|brief|realtime`，因为它只影响当前 route 的进度投递模式，不改变 Codex 执行语义；实际可用值由渠道 `ChannelDeliveryPolicy.allowedProgressModes` 决定。
 - 普通文本不是命令；当当前 active turn 支持 mid-turn steer 时，优先投递到当前 turn。steer 不可用、失败或当前 turn 不可 steer 时，继续按当前 route 队列策略处理；入队时必须快照本轮 `sendFile` 和 collaboration mode。
 
 busy route 下必须拒绝的命令：
@@ -1107,19 +1107,20 @@ CLI JSONL adapter 可用事件：
 
 - `turn.started`：非微信渠道由 Bridge 发送简短“Codex 正在处理这条消息”提示，不在每次任务开始时重复刷 Session ID；微信渠道不发送这条提示。
 - `item.completed` + `reasoning`：发送普通文本进度，内容为 Codex 提供的 reasoning summary；兼容 `summary`、`summary_text`、顶层 `codex_thinking` 等不同 JSONL 形态。
-- `item.updated` + `plan_update`：发送计划更新，归类为 brief 模式可见的自言自语/计划进度。
+- `item.updated` + `plan_update`：发送计划更新，归类为 brief 模式可见的计划摘要进度。
 - `item.started/completed` + `command_execution`：发送命令开始或完成摘要；命令输出中的图片或文件路径只作为进度文本，不触发媒体发送。
 - `item.completed` + `file_change`：发送文件变更摘要。
 - `mcp_tool_call`、`web_search`、`todo_list`：发送工具、搜索或计划摘要。
 
 Bridge 会把进度事件标记为 `reasoning`、`todo`、`search`、`file_change`、`command`、`tool` 等类别，并按投递模式过滤：
 
-- `brief`：默认模式，只投递计划/自言自语、搜索和文件变更摘要，不投递命令/工具细节。
-- `detailed`：调试模式，投递全部可见进度，包括命令开始/完成和工具调用。
-- `tools`：只投递结构化工具生命周期，不投递普通文本进度；仅在渠道策略 `toolProgress: "send"` 时有实际输出。
+- `brief`：默认模式，投递 Codex 旁白、计划、搜索和文件变更摘要，不投递命令/工具细节。
+- `detailed`：内部/历史调试模式，投递全部可见进度，包括命令开始/完成和工具调用；不再作为普通 `/progress` 公开选项。
+- `realtime`：全量实时模式，普通文本进度逐条投递到聊天渠道，不做 Bridge 层节流、合并、去重、截断和失败冷却；仅在渠道 `realtimeProgress: "send"` 时可用，支持结构化工具进度的渠道同时投递工具生命周期。
+- `tools`：内部/历史结构化工具生命周期模式，不投递普通文本进度；仅在渠道策略 `toolProgress: "send"` 时有实际输出，不再作为普通 `/progress` 公开选项。
 - `silent`：安静模式，不投递进度文本，也不投递结构化工具生命周期；仍会发送审批、错误、安全通知、命令回复、`request_user_input` 和最终回复。文件发送只由 `/sendfile` 单次授权触发，不归 progress 模式控制。
 
-非微信渠道可通过 `/progress [brief|detailed|silent]` 为当前 route 调整普通文本进度模式；微信 2.4.4 实验分支支持 `/progress [brief|detailed|tools|silent]`，默认持久模式为 `silent`。CLI 可通过 `--progress brief|detailed|tools|silent` 设置默认模式，其中 `tools` 仅在支持结构化工具生命周期的渠道有效。微信专用 `/fff` 是静默刷新命令，不回复、不入队、不转发给 Codex。
+微信 2.4.4 实验分支支持 `/progress [silent|brief]`，默认持久模式为 `silent`，不开放 `realtime/detailed/tools`。飞书支持 `/progress [realtime|silent|brief]`，默认 `brief`，显式 `realtime` 逐条投递普通文本进度。CLI 可通过 `--progress silent|brief|realtime` 设置默认模式，其中 `realtime` 仅在渠道策略允许时生效。微信专用 `/fff` 是静默刷新命令，不回复、不入队、不转发给 Codex。
 
 app-server adapter 可用事件：
 
@@ -1140,7 +1141,7 @@ app-server adapter 可用事件：
 - `item/fileChange/patchUpdated`
 - `serverRequest/resolved`
 
-其中 `thread/tokenUsage/updated` 会更新当前 session 的上下文 token 用量，供 `/status` 展示。`agentMessage.phase=commentary` 的消息视为阶段性 commentary 更新，转成 `assistant.progress`；`phase=final_answer` 或缺省 phase 按兼容路径进入最终回复。Plan mode 下 completed `item.type=plan` 除继续生成 `todo` progress 外，还会转成 `assistant.plan`，由 Bridge 作为最终可投递内容处理。`item/reasoning/textDelta` 默认通过 `optOutNotificationMethods` 关闭，避免把 raw reasoning 推送到聊天通道。
+其中 `thread/tokenUsage/updated` 会更新当前 session 的上下文 token 用量，供 `/status` 展示。`agentMessage.phase=commentary` 的消息视为 Codex 旁白，转成独立 `assistant.commentary`，由 BridgeCommentaryDelivery 按 `brief`、`realtime` 或 Plan mode 旁白策略投递；`phase=final_answer` 或缺省 phase 按兼容路径进入最终回复。Plan mode 下 completed `item.type=plan` 除继续生成 `todo` progress 外，还会转成 `assistant.plan`，由 Bridge 作为最终可投递内容处理。`item/reasoning/textDelta` 默认通过 `optOutNotificationMethods` 关闭，避免把 raw reasoning 推送到聊天通道。
 
 ### 8.2.2 微信发送策略
 
@@ -1149,9 +1150,9 @@ app-server adapter 可用事件：
 - task-start 不发送到微信。
 - 默认持久模式为 `silent`：不发送普通文本进度，也不发送 `TOOL_CALL_START/TOOL_CALL_RESULT`。
 - `/progress brief` 发送摘要普通文本进度，不发送结构化工具生命周期。
-- `/progress detailed` 发送完整可见文本进度，并发送结构化工具生命周期。
+- `detailed/tools` 不再作为普通 `/progress` 公开模式；结构化工具生命周期代码保留为内部能力。
 - `/progress silent` 不发送普通文本进度，也不发送结构化工具生命周期。
-- `/plan` turn 可以临时使用 detailed effective mode，发送计划过程和结构化工具生命周期，但不改 route 持久化配置；如果 route 为 `silent`，仍保持静默。
+- `/plan` turn 不改 route 持久化 `/progress` 配置；即使微信默认 `silent`，仍默认低频投递 Codex 旁白和最终计划，但不因此开启命令进度、工具生命周期或 realtime。
 - Plan mode 的最终 `assistant.plan` 会作为关键最终内容发送，不受 progress 模式影响。
 - final answer、turn failed/error、审批提示、审批处理结果、队列提示、媒体发送结果和用户主动命令回复仍发送。
 - `/fff` 在微信中静默处理，作为用户主动入站触发，不产生回复。

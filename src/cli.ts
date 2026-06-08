@@ -178,7 +178,9 @@ function parseStartupOptions(args: string[]): StartupOptions {
       const value = args[++index];
       if (!value) throw new Error(`${arg} 需要模式参数`);
       const mode = parseProgressDeliveryMode(value);
-      if (!mode) throw new Error(`${arg} 只能是 brief、detailed 或 silent`);
+      if (!mode || mode === "detailed" || mode === "tools") {
+        throw new Error(`${arg} 只能是 silent、brief 或 realtime`);
+      }
       options.progressMode = mode;
     } else if (arg === "--max-concurrent-turns") {
       const value = args[++index];
@@ -464,7 +466,7 @@ function printHelp(): void {
     "    --permission approval|full       设置安全沙箱或完全权限",
     "    --codex-adapter app-server|exec  设置 Codex 接入方式；默认 app-server，支持微信审批",
     "    --yes-dangerously-full           非交互确认完全权限",
-    "    --progress brief|detailed|tools|silent 设置默认进度投递模式；tools 仅在支持结构化工具生命周期的渠道生效",
+    "    --progress silent|brief|realtime     设置默认进度投递模式；realtime 仅在渠道策略允许时生效",
     "    --max-concurrent-turns <n>       设置全局 Codex turn 并发上限；默认不限制",
     "    --no-tui                        使用普通 prompt 交互，不进入 Ink TUI",
     "    --no-interactive                 非交互启动；需要已有微信登录态",

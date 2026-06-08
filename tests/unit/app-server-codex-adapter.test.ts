@@ -248,6 +248,13 @@ rl.on("line", (line) => {
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
       return;
     }
+    if (prompt.includes("commentary only")) {
+      send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "agentMessage", id: "commentary-only-1", text: "", phase: "commentary", memoryCitation: null } } });
+      send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "commentary-only-1", delta: "只有旁白，没有最终回复。" } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "commentary-only-1", text: "只有旁白，没有最终回复。", phase: "commentary", memoryCitation: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+      return;
+    }
     if (prompt.includes("commentary message")) {
       send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "agentMessage", id: "commentary-1", text: "", phase: "commentary", memoryCitation: null } } });
       send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "commentary-1", delta: "我正在检查状态。" } });
@@ -827,7 +834,7 @@ test("AppServerCodexAdapter keeps network available in approval workspace sandbo
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "sandbox network true"));
 });
 
-test("AppServerCodexAdapter forwards commentary agent messages as progress", async () => {
+test("AppServerCodexAdapter forwards commentary agent messages as commentary", async () => {
   const root = tempDir();
   const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
   const session = await adapter.startSession({
@@ -842,7 +849,8 @@ test("AppServerCodexAdapter forwards commentary agent messages as progress", asy
   }
   await adapter.stop();
 
-  assert.ok(events.some((event) => event.type === "assistant.progress" && event.kind === "other" && event.text.includes("我正在检查状态")));
+  assert.ok(events.some((event) => event.type === "assistant.commentary" && event.text.includes("我正在检查状态")));
+  assert.equal(events.some((event) => event.type === "assistant.progress" && event.kind === "other" && event.text.includes("我正在检查状态")), false);
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "commentary final"));
   assert.equal(events.some((event) => event.type === "assistant.completed" && event.text.includes("我正在检查状态")), false);
 });
@@ -862,14 +870,34 @@ test("AppServerCodexAdapter does not duplicate chunked commentary on completion"
   }
   await adapter.stop();
 
-  const progressTexts = events
-    .filter((event) => event.type === "assistant.progress" && event.kind === "other")
-    .map((event) => event.type === "assistant.progress" ? event.text : "");
-  assert.equal(progressTexts.length, 1);
-  assert.ok(progressTexts[0].includes("第一段内容"));
-  assert.ok(progressTexts[0].includes("第二段"));
+  const commentaryTexts = events
+    .filter((event) => event.type === "assistant.commentary")
+    .map((event) => event.type === "assistant.commentary" ? event.text : "");
+  assert.equal(commentaryTexts.length, 1);
+  assert.ok(commentaryTexts[0].includes("第一段内容"));
+  assert.ok(commentaryTexts[0].includes("第二段"));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "commentary chunks final"));
   assert.equal(events.some((event) => event.type === "assistant.completed" && event.text.includes("第一段内容")), false);
+});
+
+test("AppServerCodexAdapter emits commentary-only turns without final completion", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events = [];
+
+  for await (const event of adapter.run(session.id, "commentary only please")) {
+    events.push(event);
+  }
+  await adapter.stop();
+
+  assert.ok(events.some((event) => event.type === "assistant.commentary" && event.text === "只有旁白，没有最终回复。"));
+  assert.equal(events.some((event) => event.type === "assistant.completed"), false);
+  assert.ok(events.some((event) => event.type === "turn.completed"));
 });
 
 test("AppServerCodexAdapter aggregates command output deltas into one bounded summary", async () => {

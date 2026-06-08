@@ -383,7 +383,7 @@ npm test
 验证重点：
 
 - `bridge-mock` 状态、帮助、进度、权限相关测试。
-- 微信 2.4.4 实验分支 help/status 测试：默认 silent，并覆盖 brief/detailed/tools 展示。
+- 微信 2.4.4 实验分支 help/status 测试：默认 silent，并覆盖只展示 silent/brief。
 
 ### 阶段 3：拆命令模块和 command router
 
@@ -544,7 +544,7 @@ npm test
 - `/sendfile`
 - `/progress`
 - 微信 `/fff`
-- 微信 2.4.4 默认 silent，并支持 `/progress brief|detailed|tools|silent`。
+- 微信 2.4.4 默认 silent，并支持 `/progress silent|brief`；`realtime/detailed/tools` 不作为微信普通 `/progress` 公开模式。
 - 飞书 progress modes。
 - 飞书 typing reaction。
 - approval retry。
@@ -575,12 +575,12 @@ npm test
 | --- | --- |
 | `bridge-types.ts` | 类型迁移后编译通过；跨模块共享类型没有循环依赖；默认常量与原行为一致。 |
 | `formatters.ts` | 路径压缩、权限文案、Goal 时间、model policy、progress mode、审批类型、百分比、耗时、数字和上下文用量格式化。 |
-| `status-text.ts` | `/status`、`/sessions`、`/whoami`、`/debug`、`/help` 输出关键文本；微信 2.4.4 默认 silent、brief/detailed/tools 和飞书 progress mode 展示保持一致。 |
+| `status-text.ts` | `/status`、`/sessions`、`/whoami`、`/debug`、`/help` 输出关键文本；微信 2.4.4 默认 silent、只展示 silent/brief，飞书展示 realtime/silent/brief。 |
 | `command-router.ts` | slash command 分发、unknown command、route busy mutation guard、refresh command、平台特殊命令、审批命令入口。 |
 | `commands/goal-command.ts` | `/goal`、`/goal pause`、`/goal resume`、`/goal clear`、goal 状态时间、错误文案和后台 Goal 状态展示。 |
 | `commands/model-command.ts` | `/model` 列表、模型切换、默认模型、reasoning effort 设置和非法参数提示。 |
 | `commands/permission-command.ts` | `/permission` 展示、approval/full 模式切换、session 级权限保存和恢复。 |
-| `commands/progress-command.ts` | `/progress brief`、`/progress detailed`、`/progress tools`、`/progress silent`；微信 2.4.4 默认 silent，非结构化工具渠道不展示 tools。 |
+| `commands/progress-command.ts` | `/progress` 按 `ChannelDeliveryPolicy.allowedProgressModes` 展示和校验；微信只展示 `silent/brief`，飞书展示 `realtime/silent/brief`。 |
 | `commands/collaboration-command.ts` | `/plan`、`/code` 进入对应协作模式；inline prompt 继续投递到当前 route。 |
 | `commands/sendfile-command.ts` | `/sendfile` 只对本轮生效；协议 instruction 拼接正确；参数错误提示正确。 |
 | `session-flow.ts` | 新 session、resume/use、session selection、owner 冲突、pending 微信主聊天绑定、重启恢复绑定、新 session 工作目录取启动 cwd。 |

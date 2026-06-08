@@ -13,6 +13,7 @@ import { TurnSchedulerAbortError } from "./turn-scheduler.js";
 import type { BridgeDelivery } from "./delivery.js";
 import type { SessionContextRefreshManager } from "./context-refresh.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
+import { BridgeCommentaryDelivery } from "./commentary-delivery.js";
 import { BridgeNotificationDelivery } from "./notification-delivery.js";
 import { BridgePendingInputManager } from "./pending-input.js";
 import type { BridgeSessionFlow } from "./session-flow.js";
@@ -39,8 +40,11 @@ export interface BridgeRouteQueueOptions {
     routeKey: string,
     kind: CodexProgressKind | undefined,
   ): boolean;
+  shouldDeliverCommentaryWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
+  isRealtimeCommentaryWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
   shouldDeliverToolProgressWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
   progressDelivery?: BridgeProgressDelivery;
+  commentaryDelivery?: BridgeCommentaryDelivery;
   notificationDelivery?: BridgeNotificationDelivery;
   pendingInput?: BridgePendingInputManager;
   contextRefresh?: SessionContextRefreshManager;
@@ -59,6 +63,7 @@ export class BridgeRouteQueue {
   private readonly deliveryPolicyFor: BridgeRouteQueueOptions["deliveryPolicyFor"];
   private readonly contextRefresh?: SessionContextRefreshManager;
   private readonly progressDelivery: BridgeProgressDelivery;
+  private readonly commentaryDelivery: BridgeCommentaryDelivery;
   private readonly shouldDeliverToolProgressWithPolicy: BridgeRouteQueueOptions["shouldDeliverToolProgressWithPolicy"];
   private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly pendingInput?: BridgePendingInputManager;
@@ -82,6 +87,12 @@ export class BridgeRouteQueue {
       delivery: this.delivery,
       transcript: this.transcript,
       shouldDeliverProgress: options.shouldDeliverProgressWithPolicy,
+    });
+    this.commentaryDelivery = options.commentaryDelivery ?? new BridgeCommentaryDelivery({
+      delivery: this.delivery,
+      transcript: this.transcript,
+      shouldDeliverCommentary: options.shouldDeliverCommentaryWithPolicy,
+      isRealtimeCommentary: options.isRealtimeCommentaryWithPolicy,
     });
     this.shouldDeliverToolProgressWithPolicy = options.shouldDeliverToolProgressWithPolicy;
     this.notificationDelivery = options.notificationDelivery ?? new BridgeNotificationDelivery({
@@ -242,6 +253,9 @@ export class BridgeRouteQueue {
         await this.delivery.withTyping(target, async () => {
           let finalText = "";
           let finalPlanText = "";
+          let lastCommentaryText = "";
+          let lastDeliveredCommentaryText = "";
+          let turnFailed = false;
           let currentTurnStartedAt: string | undefined;
           const codexPrompt = sendFile
             ? typeof prompt === "string"
@@ -266,6 +280,17 @@ export class BridgeRouteQueue {
                 text: event.text,
                 kind: event.kind,
               });
+            } else if (event.type === "assistant.commentary") {
+              lastCommentaryText = event.text;
+              const result = await this.commentaryDelivery.handleCommentary({
+                routeKey: message.routeKey,
+                target,
+                policy: deliveryPolicy,
+                text: event.text,
+              });
+              if (result.deliveredText?.includes(event.text)) {
+                lastDeliveredCommentaryText = event.text;
+              }
             } else if (event.type === "tool.progress") {
               if (this.shouldDeliverToolProgressWithPolicy(deliveryPolicy, message.routeKey)) {
                 await this.delivery.sendToolProgress(message.routeKey, target, {
@@ -332,26 +357,36 @@ export class BridgeRouteQueue {
                 this.state.setSessionStatus(session.id, { type: "idle" });
               }
             } else if (event.type === "turn.failed") {
+              turnFailed = true;
               this.state.setSessionStatus(session.id, { type: "failed", error: event.error });
               await this.progressDelivery.flushRoute(message.routeKey);
+              await this.commentaryDelivery.flushRoute(message.routeKey);
               await this.delivery.sendText(target, `Codex 执行失败: ${event.error}`);
             }
           }
           await this.progressDelivery.flushRoute(message.routeKey);
+          const commentaryFlush = await this.commentaryDelivery.flushRoute(message.routeKey);
+          if (lastCommentaryText && commentaryFlush.deliveredText?.includes(lastCommentaryText)) {
+            lastDeliveredCommentaryText = lastCommentaryText;
+          }
           const composedFinalText = composeFinalAnswer(finalPlanText, finalText);
-          if (composedFinalText) {
+          if (!turnFailed && composedFinalText) {
             const visibleText = sendFile ? stripBridgeSendFileRefs(composedFinalText) : composedFinalText;
             if (visibleText) await this.delivery.sendText(target, visibleText);
             if (sendFile) {
               await this.delivery.sendRequestedFiles(target, composedFinalText, session.cwd);
             }
+          } else if (!turnFailed && lastCommentaryText && lastDeliveredCommentaryText !== lastCommentaryText) {
+            await this.delivery.sendText(target, lastCommentaryText);
           }
         });
       }, { signal: abortController.signal });
     } finally {
       await this.contextRefresh?.recordAfterRun(session.id);
       await this.progressDelivery.flushRoute(message.routeKey);
+      await this.commentaryDelivery.flushRoute(message.routeKey);
       this.progressDelivery.clearRoute(message.routeKey);
+      this.commentaryDelivery.clearRoute(message.routeKey);
       if (this.abortControllers.get(message.routeKey) === abortController) {
         this.abortControllers.delete(message.routeKey);
       }

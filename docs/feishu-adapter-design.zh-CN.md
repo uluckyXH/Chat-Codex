@@ -194,21 +194,23 @@ getCapabilities() {
 
 ```ts
 getDeliveryPolicy() {
-  return DEFAULT_CHANNEL_DELIVERY_POLICY;
+  return FEISHU_DELIVERY_POLICY;
 }
 ```
 
 实际效果：
 
 - `taskStart: "send"`：收到普通任务后发送“Codex 正在处理”。
-- `progress: "send"`：默认投递普通文本进度。
-- `progressCommand: "enabled"`：飞书中允许 `/progress brief|detailed|silent`。
+- `progress: "send"`：默认投递普通文本摘要进度；Codex 旁白通过独立 `assistant.commentary` 事件在 brief/realtime 下投递。
+- `realtimeProgress: "send"`：飞书中允许 `/progress realtime` 逐条投递普通文本进度。
+- `allowedProgressModes: ["realtime", "silent", "brief"]`：飞书中只公开 realtime、silent 和 brief。
+- `progressCommand: "enabled"`：飞书中允许 `/progress realtime|silent|brief`。
 - 没有微信专用 `/fff` 刷新命令。
 
-Bridge 当前默认进度模式是 `brief`，只投递 reasoning、todo、search、file_change、other 等摘要进度。用户可在飞书里发送：
+Bridge 当前默认进度模式是 `brief`，投递 Codex 旁白、reasoning、todo、search、file_change、other 等摘要进度。用户可在飞书里发送：
 
 ```text
-/progress detailed
+/progress realtime
 /progress brief
 /progress silent
 ```

@@ -177,7 +177,7 @@ export class AppServerTurnController {
       const itemId = stringValue(params.itemId);
       const phase = itemId && turn ? turn.agentMessagePhases.get(itemId) : undefined;
       if (turn && itemId && phase === "commentary") {
-        this.appendProgressDelta(turn, sessionId, turnId, itemId, delta, "other");
+        this.appendCommentaryDelta(turn, itemId, delta);
         return;
       }
       if (turn) turn.finalText += delta;
@@ -283,7 +283,7 @@ export class AppServerTurnController {
       const phase = messagePhaseValue(item.phase);
       if (phase === "commentary") {
         if (itemId && turn.emittedProgressItemIds.has(itemId)) return;
-        if (text) this.pushProgressEvent(turn, sessionId, turnId, text, "other");
+        if (text) this.pushCommentaryEvent(turn, sessionId, turnId, text, itemId);
         return;
       }
       if (text) {
@@ -396,13 +396,24 @@ export class AppServerTurnController {
     kind: CodexProgressKind,
     prefix?: string,
   ): void {
-    const draft = turn.progressDrafts.get(itemId) ?? { kind, text: "", prefix };
+    const draft = turn.progressDrafts.get(itemId) ?? { type: "progress" as const, kind, text: "", prefix };
     draft.text += delta;
+    draft.type = "progress";
     draft.kind = kind;
     draft.prefix = prefix;
     turn.progressDrafts.set(itemId, draft);
     if (shouldFlushProgressDraft(draft.text)) {
       this.flushProgressDraft(turn, sessionId, turnId, itemId);
+    }
+  }
+
+  private appendCommentaryDelta(turn: TurnQueueRecord, itemId: string, delta: string): void {
+    const draft = turn.progressDrafts.get(itemId) ?? { type: "commentary" as const, text: "" };
+    draft.text += delta;
+    draft.type = "commentary";
+    turn.progressDrafts.set(itemId, draft);
+    if (shouldFlushProgressDraft(draft.text)) {
+      this.flushProgressDraft(turn, turn.sessionId, turn.turnId, itemId);
     }
   }
 
@@ -413,7 +424,11 @@ export class AppServerTurnController {
     const text = draft.text.trim();
     if (!text) return;
     turn.emittedProgressItemIds.add(itemId);
-    this.pushProgressEvent(turn, sessionId, turnId, `${draft.prefix ?? ""}${text}`, draft.kind);
+    if (draft.type === "commentary") {
+      this.pushCommentaryEvent(turn, sessionId, turnId, text, itemId);
+      return;
+    }
+    if (draft.kind) this.pushProgressEvent(turn, sessionId, turnId, `${draft.prefix ?? ""}${text}`, draft.kind);
   }
 
   private pushProgressEvent(
@@ -427,6 +442,25 @@ export class AppServerTurnController {
     if (!normalized || turn.emittedProgress.has(normalized)) return;
     turn.emittedProgress.add(normalized);
     turn.queue.push({ type: "assistant.progress", sessionId, turnId, text: normalized, kind });
+  }
+
+  private pushCommentaryEvent(
+    turn: TurnQueueRecord,
+    sessionId: string,
+    turnId: string,
+    text: string,
+    itemId?: string,
+  ): void {
+    const normalized = text.trim();
+    if (!normalized || turn.emittedCommentary.has(normalized)) return;
+    turn.emittedCommentary.add(normalized);
+    turn.queue.push({
+      type: "assistant.commentary",
+      sessionId,
+      turnId,
+      text: normalized,
+      ...(itemId ? { itemId } : {}),
+    });
   }
 }
 

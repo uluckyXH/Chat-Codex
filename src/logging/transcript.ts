@@ -6,6 +6,10 @@ import { formatLocalClock } from "../time/display-time.js";
 export interface TranscriptSink {
   inbound(message: ChannelMessage, text: string): void;
   outbound(target: ChannelTarget, text: string): void;
+  observedCommentary?(target: ChannelTarget, text: string): void;
+  outboundCommentary?(target: ChannelTarget, text: string): void;
+  localCommentary?(target: ChannelTarget, text: string): void;
+  observedProgress?(target: ChannelTarget, text: string): void;
   outboundProgress?(target: ChannelTarget, text: string): void;
   localProgress?(target: ChannelTarget, text: string): void;
   outboundMedia?(target: ChannelTarget, media: ChannelMedia): void;
@@ -68,6 +72,42 @@ export class ConsoleTranscriptSink implements TranscriptSink {
     const tone: TranscriptTone = "progress";
     this.writeBlock([
       this.header(transcriptChannelLabel(target.channelId), "=>", transcriptTargetConversation(target), "进度", tone),
+      this.verbose ? `route: ${target.routeKey}` : undefined,
+      ...this.bodyLines(text, tone),
+    ]);
+  }
+
+  outboundCommentary(target: ChannelTarget, text: string): void {
+    const tone: TranscriptTone = "progress";
+    this.writeBlock([
+      this.header(transcriptChannelLabel(target.channelId), "=>", transcriptTargetConversation(target), "旁白", tone),
+      this.verbose ? `route: ${target.routeKey}` : undefined,
+      ...this.bodyLines(text, tone),
+    ]);
+  }
+
+  observedCommentary(target: ChannelTarget, text: string): void {
+    const tone: TranscriptTone = "progress";
+    this.writeBlock([
+      this.header(transcriptChannelLabel(target.channelId), "--", transcriptTargetConversation(target), "本地旁白", tone),
+      this.verbose ? `route: ${target.routeKey}` : undefined,
+      ...this.bodyLines(text, tone),
+    ]);
+  }
+
+  localCommentary(target: ChannelTarget, text: string): void {
+    const tone: TranscriptTone = "progress";
+    this.writeBlock([
+      this.header(transcriptChannelLabel(target.channelId), "--", transcriptTargetConversation(target), "本地旁白（未投递）", tone),
+      this.verbose ? `route: ${target.routeKey}` : undefined,
+      ...this.bodyLines(text, tone),
+    ]);
+  }
+
+  observedProgress(target: ChannelTarget, text: string): void {
+    const tone: TranscriptTone = "progress";
+    this.writeBlock([
+      this.header(transcriptChannelLabel(target.channelId), "--", transcriptTargetConversation(target), "本地进度", tone),
       this.verbose ? `route: ${target.routeKey}` : undefined,
       ...this.bodyLines(text, tone),
     ]);

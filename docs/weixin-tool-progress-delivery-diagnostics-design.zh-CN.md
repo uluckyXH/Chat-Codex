@@ -1,5 +1,7 @@
 # 微信工具进度投递与诊断日志设计
 
+> 2026-06-08 更新：微信普通 `/progress` 用户可见模式已精简为 `silent/brief`。本文关于 `/progress detailed` 和 `/progress tools` 的内容保留为结构化工具进度诊断背景和内部能力说明，不再代表当前微信用户可见命令。
+
 ## 背景
 
 微信 2.4.4 适配后，Chat-Codex 开始支持把 Codex 的结构化工具生命周期发送到微信：
@@ -80,7 +82,7 @@ TOOL_CALL_RESULT
 
 - `tool progress send succeeded` 只能说明 Chat-Codex 调微信接口发送结构化工具进度成功。
 - 它不能证明微信客户端一定显示了一条用户可见文本。
-- 如果要用户明确看到工具/命令摘要，应依赖 `/progress detailed` 的普通文本进度，而不是只依赖 `TOOL_CALL_START/RESULT`。
+- 如果要用户明确看到工具/命令摘要，应依赖用户可见的普通文本摘要进度，而不是只依赖 `TOOL_CALL_START/RESULT`。当前微信普通 `/progress` 只公开 `silent/brief`，不再公开 `detailed/tools`。
 
 ### 本地运行日志
 
@@ -132,26 +134,29 @@ BridgeDelivery
 
 ## 投递模式语义
 
-微信当前支持：
+微信当前普通 `/progress` 对用户公开：
 
 ```text
 /progress silent
 /progress brief
-/progress detailed
-/progress tools
 ```
 
 | 模式 | 普通文本进度 | 结构化工具进度 | 用户是否一定能看到工具信息 |
 | --- | --- | --- | --- |
 | `silent` | 不投递 | 不投递 | 只能看到最终回复、审批、错误等关键消息 |
 | `brief` | 投递摘要文本 | 不投递 | 能看到摘要文本 |
-| `detailed` | 投递完整可见文本进度 | 投递 `TOOL_CALL_START/RESULT` | 能看到文本进度；结构化进度是否明显展示取决于微信客户端 |
-| `tools` | 不投递 | 投递 `TOOL_CALL_START/RESULT` | 不保证像普通文本一样可见 |
+
+内部/历史模式仍保留代码路径，但不通过普通微信 `/progress` 暴露：
+
+| 内部模式 | 普通文本进度 | 结构化工具进度 | 当前定位 |
+| --- | --- | --- | --- |
+| `detailed` | 投递完整可见文本进度 | 投递 `TOOL_CALL_START/RESULT` | 历史调试能力，不作为微信用户入口 |
+| `tools` | 不投递 | 投递 `TOOL_CALL_START/RESULT` | 结构化工具生命周期实验能力，不作为微信用户入口 |
 
 结论：
 
-- 如果目标是“用户在微信里明确看到工具做了什么”，应使用 `/progress detailed`。
-- 如果目标是“测试微信 2.4.4 结构化工具生命周期是否能被接收或聚合”，使用 `/progress tools`。
+- 如果目标是“用户在微信里低噪声看到 Codex 做了什么”，当前微信只建议使用 `/progress brief`。
+- 如果目标是“测试微信 2.4.4 结构化工具生命周期是否能被接收或聚合”，应走内部测试或专门调试入口，不再让普通微信用户切 `/progress tools`。
 - 如果目标是“少打扰，只看最终结果”，使用 `/progress silent`。
 
 ## 为什么会刷屏
@@ -233,7 +238,7 @@ tool progress send succeeded phase=end
 错误: sendmessage failed: ret=-2 errcode=0
 ```
 
-这样 detailed 模式下即使微信投递失败，本机也能看到失败的是哪一条普通文本进度。
+这样即使微信普通文本进度投递失败，本机也能看到失败的是哪一条进度。
 
 结构化工具进度没有天然的普通文本正文，因此失败时需要生成一段可读正文：
 
@@ -248,7 +253,7 @@ tool progress send succeeded phase=end
 错误: sendmessage failed: ret=-2 errcode=0
 ```
 
-普通文本进度和结构化工具进度使用各自独立的失败冷却，避免 detailed 模式下某一类投递失败把另一类详情也挡住。普通文本进度前一次发送失败导致后续文本进度处于冷却期时，后续未投递内容也必须进入本地日志：
+普通文本进度和结构化工具进度使用各自独立的失败冷却，避免某一类投递失败把另一类诊断也挡住。普通文本进度前一次发送失败导致后续文本进度处于冷却期时，后续未投递内容也必须进入本地日志：
 
 ```text
 发送暂缓，未投递到聊天渠道。
@@ -352,12 +357,12 @@ Trace 展示：
 
 ## 用户可见策略
 
-“工具调用的信息是否会输出到微信”取决于当前 `/progress` 模式：
+“工具调用的信息是否会输出到微信”取决于当前渠道策略和 `/progress` 模式：
 
 - `silent`：不会把工具过程发给微信，只发最终结果和关键交互。
-- `tools`：会把结构化工具生命周期发给微信接口，但不保证客户端像普通文本一样显示。
-- `detailed`：会发普通文本进度，所以用户应该能看到工具/命令摘要；同时也发结构化工具生命周期。
-- `brief`：会发低噪声文本摘要，不发结构化工具生命周期。
+- `brief`：会发低噪声文本摘要和 Codex 旁白，不发结构化工具生命周期。
+- `tools`：内部/历史模式，会把结构化工具生命周期发给微信接口，但不保证客户端像普通文本一样显示。
+- `detailed`：内部/历史模式，会发普通文本进度，并在渠道支持时发送结构化工具生命周期。
 
 因此不能把本地日志当作微信消息数量，也不能把结构化工具进度成功当作用户一定看到了文本。
 
@@ -399,9 +404,9 @@ CHAT_CODEX_TRACE_DELIVERY=1
 
 用微信实测三组任务：
 
-1. `/progress tools` + 多次 web search。
-2. `/progress detailed` + `npm test`。
-3. `/progress silent` + 长任务最终回复。
+1. `/progress brief` + 会产生搜索、文件变更或计划摘要的任务。
+2. `/progress silent` + 长任务最终回复。
+3. `/plan` + 会产生 Codex 旁白和最终计划的任务。
 
 记录：
 
@@ -422,8 +427,9 @@ CHAT_CODEX_TRACE_DELIVERY=1
 
 集成测试：
 
-- `/progress tools` 会调用 `sendToolProgress`，但默认 TUI 不刷 started/succeeded。
-- `/progress detailed` 会发送普通文本 progress，TUI transcript 保留真实出站文本。
+- 微信用户可见 `/progress` 只接受 `silent/brief`。
+- 内部结构化工具进度测试可直接覆盖 `sendToolProgress`，但默认 TUI 不刷 started/succeeded。
+- `/progress brief` 会发送摘要普通文本 progress，TUI transcript 保留真实出站文本。
 - 微信发送失败时，TUI 有完整 `warn`。
 
 ## 结论
@@ -432,7 +438,7 @@ CHAT_CODEX_TRACE_DELIVERY=1
 
 工具调用信息可以发送到微信，但有两种形态：
 
-- 普通文本进度：用户明确可见，主要由 `/progress brief/detailed` 控制。
-- 结构化工具进度：发给微信接口，主要由 `/progress tools/detailed` 控制，但客户端是否明显展示取决于微信侧。
+- 普通文本进度：用户明确可见，当前微信用户入口只由 `/progress brief` 打开。
+- 结构化工具进度：可发给微信接口，但当前只保留为内部能力；客户端是否明显展示取决于微信侧。
 
 本地诊断日志应服务排障，不应在日常模式下逐条展开成功流水。长期应使用“失败展开、成功聚合、trace 全量”的三层策略。

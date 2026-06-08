@@ -78,6 +78,37 @@ test("BridgeDelivery suppresses progress briefly after a progress send failure",
   assert.deepEqual(fixture.sentTexts, []);
 });
 
+test("BridgeDelivery does not cooldown realtime progress failures", async () => {
+  const logger = new CapturingLogger();
+  const transcript = new CapturingTranscript();
+  let attempts = 0;
+  const delivery = new BridgeDelivery({
+    channels: {
+      sendText: async () => {
+        attempts += 1;
+        throw new Error("send failed");
+      },
+    } as unknown as ChannelRegistry,
+    approvals: new ApprovalManager(),
+    logger,
+    transcript,
+    approvalSendRetryDelayMs: 1,
+  });
+
+  await delivery.sendRealtimeProgressText("route", target(), "realtime progress 1");
+  await delivery.sendRealtimeProgressText("route", target(), "realtime progress 2");
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(logger.warnings.map((warning) => warning.message), [
+    "realtime progress message send failed",
+    "realtime progress message send failed",
+  ]);
+  assert.equal(transcript.localProgressEvents.length, 2);
+  assert.match(transcript.localProgressEvents[0]?.text ?? "", /realtime progress 1/);
+  assert.match(transcript.localProgressEvents[1]?.text ?? "", /realtime progress 2/);
+  assert.doesNotMatch(transcript.localProgressEvents[1]?.text ?? "", /发送暂缓/);
+});
+
 test("BridgeDelivery keeps successful progress quiet and records failed progress locally", async () => {
   const successLogger = new CapturingLogger();
   const successTranscript = new CapturingTranscript();

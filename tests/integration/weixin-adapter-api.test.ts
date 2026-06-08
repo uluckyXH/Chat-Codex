@@ -32,6 +32,20 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+test("WeixinAdapter delivery policy disables realtime progress", () => {
+  const adapter = new WeixinAdapter({
+    store: new FileWeixinAccountStore(tempStateDir()),
+    pollOnStart: false,
+  });
+  const policy = adapter.getDeliveryPolicy();
+
+  assert.equal(policy.progress, "send");
+  assert.equal(policy.toolProgress, "send");
+  assert.equal(policy.realtimeProgress, "suppress");
+  assert.deepEqual(policy.allowedProgressModes, ["silent", "brief"]);
+  assert.equal(policy.defaultProgressMode, "silent");
+});
+
 test("WeixinAdapter starts QR login, waits for confirmation, and stores account credentials", async () => {
   const store = new FileWeixinAccountStore(tempStateDir());
   const calls: Array<{ url: string; body?: string }> = [];
@@ -411,8 +425,11 @@ test("WeixinAdapter sends typing state with getconfig typing ticket", async () =
   now += 5_000;
   await adapter.sendTyping(target, true);
   await waitFor(async () => calls.filter((call) => call.url.includes("sendtyping")).length === 3);
-  await adapter.sendTyping(target, false);
+  now += 20_000;
+  await adapter.sendTyping(target, true);
   await waitFor(async () => calls.filter((call) => call.url.includes("sendtyping")).length === 4);
+  await adapter.sendTyping(target, false);
+  await waitFor(async () => calls.filter((call) => call.url.includes("sendtyping")).length === 5);
 
   const configBody = JSON.parse(calls.find((call) => call.url.includes("getconfig"))?.body ?? "{}");
   assert.equal(configBody.ilink_user_id, "user@im.wechat");
@@ -421,8 +438,14 @@ test("WeixinAdapter sends typing state with getconfig typing ticket", async () =
     .filter((call) => call.url.includes("sendtyping"))
     .map((call) => JSON.parse(call.body ?? "{}"));
   assert.equal(calls.filter((call) => call.url.includes("getconfig")).length, 2);
-  assert.deepEqual(typingBodies.map((body) => body.status), [1, 1, 1, 2]);
-  assert.deepEqual(typingBodies.map((body) => body.typing_ticket), ["typing-ticket-1", "typing-ticket-1", "typing-ticket-2", "typing-ticket-2"]);
+  assert.deepEqual(typingBodies.map((body) => body.status), [1, 1, 1, 1, 2]);
+  assert.deepEqual(typingBodies.map((body) => body.typing_ticket), [
+    "typing-ticket-1",
+    "typing-ticket-1",
+    "typing-ticket-1",
+    "typing-ticket-2",
+    "typing-ticket-2",
+  ]);
 });
 
 test("WeixinAdapter sendTyping does not wait for slow getconfig", async () => {

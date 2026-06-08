@@ -10,6 +10,7 @@ import type { ChannelMessage, ChannelTarget } from "../../src/protocol/channel.j
 import { DEFAULT_CHANNEL_DELIVERY_POLICY } from "../../src/protocol/delivery-policy.js";
 
 class CapturingTranscript implements TranscriptSink {
+  readonly observed: string[] = [];
   readonly local: string[] = [];
 
   inbound(_message: ChannelMessage, _text: string): void {
@@ -18,6 +19,10 @@ class CapturingTranscript implements TranscriptSink {
 
   outbound(_target: ChannelTarget, _text: string): void {
     // BridgeDelivery owns outbound transcript coverage.
+  }
+
+  observedProgress(_target: ChannelTarget, text: string): void {
+    this.observed.push(text);
   }
 
   localProgress(_target: ChannelTarget, text: string): void {
@@ -50,6 +55,8 @@ test("BridgeProgressDelivery suppresses command progress in brief mode", async (
   assert.match(fixture.sentTexts[0], /正在分析/);
   assert.equal(fixture.sentTexts[0]?.includes("Codex 进度:"), false);
   assert.equal(fixture.sentTexts.some((text) => text.includes("命令完成")), false);
+  assert.deepEqual(fixture.transcript.observed, ["正在分析..."]);
+  assert.deepEqual(fixture.transcript.local, ["命令完成: npm test"]);
 });
 
 test("BridgeProgressDelivery coalesces same-route progress within interval", async () => {
@@ -84,10 +91,38 @@ test("BridgeProgressDelivery coalesces same-route progress within interval", asy
   });
 
   assert.equal(fixture.sentTexts.length, 1);
+  assert.deepEqual(fixture.transcript.observed, ["第一段进度。", "第二段进度。", "第三段进度。"]);
   await fixture.progress.flushRoute("route");
   assert.equal(fixture.sentTexts.length, 2);
   assert.match(fixture.sentTexts[1], /第二段进度/);
   assert.match(fixture.sentTexts[1], /第三段进度/);
+});
+
+test("BridgeProgressDelivery periodically flushes pending progress while route is still running", async () => {
+  const fixture = progressFixture({
+    minIntervalMs: 5,
+    shouldDeliverProgress: () => true,
+  });
+
+  await fixture.progress.handleProgress({
+    routeKey: "route",
+    target: target(),
+    policy: DEFAULT_CHANNEL_DELIVERY_POLICY,
+    text: "第一段进度。",
+    kind: "reasoning",
+  });
+  await fixture.progress.handleProgress({
+    routeKey: "route",
+    target: target(),
+    policy: DEFAULT_CHANNEL_DELIVERY_POLICY,
+    text: "第二段进度。",
+    kind: "reasoning",
+  });
+
+  assert.equal(fixture.sentTexts.length, 1);
+  await waitForTest(() => fixture.sentTexts.length === 2);
+  assert.match(fixture.sentTexts[1] ?? "", /第二段进度/);
+  assert.deepEqual(fixture.transcript.observed, ["第一段进度。", "第二段进度。"]);
 });
 
 test("BridgeProgressDelivery deduplicates repeated progress text", async () => {
@@ -109,6 +144,71 @@ test("BridgeProgressDelivery deduplicates repeated progress text", async () => {
   });
 
   assert.equal(fixture.sentTexts.length, 1);
+  assert.deepEqual(fixture.transcript.observed, ["重复进度。"]);
+});
+
+test("BridgeProgressDelivery sends every text immediately in realtime mode", async () => {
+  let now = 10_000;
+  const fixture = progressFixture({
+    now: () => now,
+    minIntervalMs: 3000,
+    shouldDeliverProgress: () => true,
+    isRealtimeProgress: () => true,
+  });
+
+  await fixture.progress.handleProgress({
+    routeKey: "route",
+    target: target(),
+    policy: DEFAULT_CHANNEL_DELIVERY_POLICY,
+    text: "第一段进度。",
+    kind: "reasoning",
+  });
+  now += 100;
+  await fixture.progress.handleProgress({
+    routeKey: "route",
+    target: target(),
+    policy: DEFAULT_CHANNEL_DELIVERY_POLICY,
+    text: "第二段进度。",
+    kind: "reasoning",
+  });
+  await fixture.progress.handleProgress({
+    routeKey: "route",
+    target: target(),
+    policy: DEFAULT_CHANNEL_DELIVERY_POLICY,
+    text: "第三段进度。",
+    kind: "todo",
+  });
+  await fixture.progress.flushRoute("route");
+
+  assert.deepEqual(fixture.sentTexts, ["第一段进度。", "第二段进度。", "第三段进度。"]);
+  assert.deepEqual(fixture.transcript.observed, ["第一段进度。", "第二段进度。", "第三段进度。"]);
+});
+
+test("BridgeProgressDelivery does not deduplicate or truncate realtime text progress", async () => {
+  const longText = "实时进度：" + "x".repeat(200);
+  const fixture = progressFixture({
+    maxProgressChars: 120,
+    shouldDeliverProgress: () => true,
+    isRealtimeProgress: () => true,
+  });
+
+  await fixture.progress.handleProgress({
+    routeKey: "route",
+    target: target(),
+    policy: DEFAULT_CHANNEL_DELIVERY_POLICY,
+    text: longText,
+    kind: "reasoning",
+  });
+  await fixture.progress.handleProgress({
+    routeKey: "route",
+    target: target(),
+    policy: DEFAULT_CHANNEL_DELIVERY_POLICY,
+    text: longText,
+    kind: "reasoning",
+  });
+
+  assert.deepEqual(fixture.sentTexts, [longText, longText]);
+  assert.deepEqual(fixture.transcript.observed, [longText, longText]);
 });
 
 test("BridgeProgressDelivery records suppressed channel progress locally", async () => {
@@ -149,7 +249,9 @@ test("BridgeProgressDelivery records progress hidden by route mode locally", asy
 
 function progressFixture(options: {
   shouldDeliverProgress: ConstructorParameters<typeof BridgeProgressDelivery>[0]["shouldDeliverProgress"];
+  isRealtimeProgress?: ConstructorParameters<typeof BridgeProgressDelivery>[0]["isRealtimeProgress"];
   minIntervalMs?: number;
+  maxProgressChars?: number;
   now?: () => number;
 }) {
   const sentTexts: string[] = [];
@@ -182,8 +284,10 @@ function progressFixture(options: {
     delivery,
     transcript,
     minIntervalMs: options.minIntervalMs,
+    maxProgressChars: options.maxProgressChars,
     now: options.now,
     shouldDeliverProgress: options.shouldDeliverProgress,
+    isRealtimeProgress: options.isRealtimeProgress,
   });
   return { progress, sentTexts, transcript };
 }
@@ -195,4 +299,12 @@ function target(): ChannelTarget {
     conversation: { id: "route", kind: "direct" },
     recipient: { id: "user" },
   };
+}
+
+async function waitForTest(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail("condition was not met");
 }

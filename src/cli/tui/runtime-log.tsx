@@ -14,7 +14,7 @@ import { formatCodexCommandSource, formatCodexPlatform } from "../../codex/codex
 import { formatLocalClock } from "../../time/display-time.js";
 import { Frame, KeyValue, Muted, Section, THEME } from "./ui-components.js";
 
-export type RuntimeLogKind = "system" | "inbound" | "outbound" | "progress" | "media" | "warn" | "error";
+export type RuntimeLogKind = "system" | "inbound" | "outbound" | "progress" | "commentary" | "media" | "warn" | "error";
 
 export interface RuntimeLogEntry {
   id: number;
@@ -88,6 +88,22 @@ export class RuntimeTuiTranscriptSink implements TranscriptSink {
 
   outboundProgress(target: ChannelTarget, text: string): void {
     this.store.add("progress", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, text);
+  }
+
+  outboundCommentary(target: ChannelTarget, text: string): void {
+    this.store.add("commentary", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, text);
+  }
+
+  observedCommentary(target: ChannelTarget, text: string): void {
+    this.store.add("commentary", `${transcriptChannelLabel(target.channelId)} -- ${transcriptTargetConversation(target)} | 本地旁白`, text);
+  }
+
+  localCommentary(target: ChannelTarget, text: string): void {
+    this.store.add("commentary", `${transcriptChannelLabel(target.channelId)} -- ${transcriptTargetConversation(target)}`, text);
+  }
+
+  observedProgress(target: ChannelTarget, text: string): void {
+    this.store.add("progress", `${transcriptChannelLabel(target.channelId)} -- ${transcriptTargetConversation(target)} | 本地进度`, text);
   }
 
   localProgress(target: ChannelTarget, text: string): void {
@@ -221,6 +237,7 @@ function runtimeLogColor(kind: RuntimeLogKind): string {
   if (kind === "inbound") return THEME.inbound;
   if (kind === "outbound") return THEME.outbound;
   if (kind === "progress") return THEME.progressLog;
+  if (kind === "commentary") return THEME.progressLog;
   if (kind === "media") return THEME.media;
   if (kind === "warn") return THEME.warning;
   return THEME.muted;
@@ -231,6 +248,7 @@ function kindLabel(kind: RuntimeLogKind): string {
   if (kind === "inbound") return "收到";
   if (kind === "outbound") return "发送";
   if (kind === "progress") return "进度";
+  if (kind === "commentary") return "旁白";
   if (kind === "media") return "媒体";
   if (kind === "warn") return "警告";
   return "错误";

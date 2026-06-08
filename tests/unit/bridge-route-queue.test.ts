@@ -253,6 +253,8 @@ function routeQueueFixture(options: {
     currentCollaborationMode: () => undefined,
     deliveryPolicyFor: () => options.deliveryPolicy ?? DEFAULT_CHANNEL_DELIVERY_POLICY,
     shouldDeliverProgressWithPolicy: () => options.shouldDeliverProgress ?? true,
+    shouldDeliverCommentaryWithPolicy: () => true,
+    isRealtimeCommentaryWithPolicy: () => false,
     shouldDeliverToolProgressWithPolicy: () => false,
     contextRefresh,
   });

@@ -33,6 +33,8 @@ import { BridgeCommandRouter } from "./command-router.js";
 import { SessionContextRefreshManager } from "./context-refresh.js";
 import { BridgeDelivery } from "./delivery.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
+import { BridgeCommentaryDelivery } from "./commentary-delivery.js";
+import { fallbackProgressModeForPolicy, isProgressModeAllowedByPolicy } from "./progress-modes.js";
 import { BridgeNotificationDelivery } from "./notification-delivery.js";
 import { BridgePendingInputManager } from "./pending-input.js";
 import { BridgeRouteQueue } from "./route-queue.js";
@@ -94,6 +96,7 @@ export class Bridge {
   private readonly transcript?: TranscriptSink;
   private readonly delivery: BridgeDelivery;
   private readonly progressDelivery: BridgeProgressDelivery;
+  private readonly commentaryDelivery: BridgeCommentaryDelivery;
   private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly pendingInput: BridgePendingInputManager;
   private readonly routeTrustGate: RouteTrustGate;
@@ -165,6 +168,13 @@ export class Bridge {
       delivery: this.delivery,
       transcript: this.transcript,
       shouldDeliverProgress: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
+      isRealtimeProgress: (policy, routeKey) => this.isRealtimeProgressWithPolicy(policy, routeKey),
+    });
+    this.commentaryDelivery = new BridgeCommentaryDelivery({
+      delivery: this.delivery,
+      transcript: this.transcript,
+      shouldDeliverCommentary: (policy, routeKey) => this.shouldDeliverCommentaryWithPolicy(policy, routeKey),
+      isRealtimeCommentary: (policy, routeKey) => this.isRealtimeCommentaryWithPolicy(policy, routeKey),
     });
     this.notificationDelivery = new BridgeNotificationDelivery({
       state: this.state,
@@ -203,8 +213,11 @@ export class Bridge {
       currentCollaborationMode: (routeKey) => this.routeCollaborationModes.get(routeKey),
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
+      shouldDeliverCommentaryWithPolicy: (policy, routeKey) => this.shouldDeliverCommentaryWithPolicy(policy, routeKey),
+      isRealtimeCommentaryWithPolicy: (policy, routeKey) => this.isRealtimeCommentaryWithPolicy(policy, routeKey),
       shouldDeliverToolProgressWithPolicy: (policy, routeKey) => this.shouldDeliverToolProgressWithPolicy(policy, routeKey),
       progressDelivery: this.progressDelivery,
+      commentaryDelivery: this.commentaryDelivery,
       notificationDelivery: this.notificationDelivery,
       pendingInput: this.pendingInput,
       contextRefresh: this.contextRefresh,
@@ -219,8 +232,11 @@ export class Bridge {
       routeTargets: this.routeTargets,
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
+      shouldDeliverCommentaryWithPolicy: (policy, routeKey) => this.shouldDeliverCommentaryWithPolicy(policy, routeKey),
+      isRealtimeCommentaryWithPolicy: (policy, routeKey) => this.isRealtimeCommentaryWithPolicy(policy, routeKey),
       shouldDeliverToolProgressWithPolicy: (policy, routeKey) => this.shouldDeliverToolProgressWithPolicy(policy, routeKey),
       progressDelivery: this.progressDelivery,
+      commentaryDelivery: this.commentaryDelivery,
       notificationDelivery: this.notificationDelivery,
       pendingInput: this.pendingInput,
       startRouteWorker: (routeKey) => this.routeQueue.startRouteWorker(routeKey),
@@ -371,6 +387,7 @@ export class Bridge {
     this.pendingMedia.clearAll();
     this.pendingInput.clearAll();
     this.progressDelivery.clearAll();
+    this.commentaryDelivery.clearAll();
     this.stopBackgroundEvents?.();
     this.stopBackgroundEvents = undefined;
     await this.channels.stop();
@@ -602,11 +619,13 @@ export class Bridge {
   }
 
   private progressModeFor(routeKey: string): ProgressDeliveryMode {
+    const policy = this.deliveryPolicyFor(this.routeMessages.get(routeKey));
     const explicit = this.routeProgressModes.get(routeKey);
-    if (explicit) return explicit;
-    const policyDefault = this.deliveryPolicyFor(this.routeMessages.get(routeKey)).defaultProgressMode;
-    if (isProgressDeliveryMode(policyDefault)) return policyDefault;
-    return this.defaultProgressMode;
+    if (explicit && isProgressModeAllowedByPolicy(explicit, policy)) return explicit;
+    const policyDefault = policy.defaultProgressMode;
+    if (isProgressDeliveryMode(policyDefault) && isProgressModeAllowedByPolicy(policyDefault, policy)) return policyDefault;
+    if (isProgressModeAllowedByPolicy(this.defaultProgressMode, policy)) return this.defaultProgressMode;
+    return fallbackProgressModeForPolicy(policy);
   }
 
   private collaborationModeForRoute(routeKey: string, sessionId?: string): CodexCollaborationMode {
@@ -646,17 +665,38 @@ export class Bridge {
     if (policy.progress === "suppress") return false;
     const mode = this.progressModeFor(routeKey);
     if (mode === "silent") return false;
-    if (this.collaborationModeForRoute(routeKey) === "plan") return true;
+    if (mode === "realtime") return policy.realtimeProgress !== "suppress";
     if (mode === "tools") return false;
     return this.statusTextRenderer.shouldDeliverProgress(routeKey, kind);
+  }
+
+  private isRealtimeProgressWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean {
+    if (policy.progress === "suppress") return false;
+    if (policy.realtimeProgress === "suppress") return false;
+    return this.progressModeFor(routeKey) === "realtime";
+  }
+
+  private shouldDeliverCommentaryWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean {
+    if (policy.progress === "suppress") return false;
+    if (this.collaborationModeForRoute(routeKey) === "plan") return true;
+    const mode = this.progressModeFor(routeKey);
+    if (mode === "silent") return false;
+    if (mode === "realtime") return policy.realtimeProgress !== "suppress";
+    if (mode === "tools") return false;
+    return mode === "brief" || mode === "detailed";
+  }
+
+  private isRealtimeCommentaryWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean {
+    if (policy.progress === "suppress") return false;
+    if (policy.realtimeProgress === "suppress") return false;
+    return this.progressModeFor(routeKey) === "realtime";
   }
 
   private shouldDeliverToolProgressWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean {
     if (policy.toolProgress !== "send") return false;
     const mode = this.progressModeFor(routeKey);
     if (mode === "silent") return false;
-    if (this.collaborationModeForRoute(routeKey) === "plan") return true;
-    return mode === "tools" || mode === "detailed";
+    return mode === "tools" || mode === "detailed" || (mode === "realtime" && policy.realtimeProgress !== "suppress");
   }
 
   private runPolicyStatus(sessionId?: string): CodexRunPolicyStatus | undefined {
@@ -671,7 +711,7 @@ export class Bridge {
 }
 
 function isProgressDeliveryMode(value: unknown): value is ProgressDeliveryMode {
-  return value === "brief" || value === "detailed" || value === "tools" || value === "silent";
+  return value === "brief" || value === "detailed" || value === "realtime" || value === "tools" || value === "silent";
 }
 
 function isFeishuDirectMessage(message: ChannelMessage): boolean {
