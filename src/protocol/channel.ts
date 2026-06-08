@@ -99,8 +99,19 @@ export interface ChannelMedia {
   caption?: string;
 }
 
+export type ChannelToolProgressPhase = "start" | "end";
+export type ChannelToolProgressStatus = "completed" | "failed" | "blocked" | "unknown";
+
+export interface ChannelToolProgress {
+  phase: ChannelToolProgressPhase;
+  toolName: string;
+  toolCallId?: string;
+  status?: ChannelToolProgressStatus;
+}
+
 export interface SendOptions {
   replyToMessageId?: string;
+  correlationId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -126,6 +137,7 @@ export interface ChannelAdapter {
   sendText(target: ChannelTarget, text: string, options?: SendOptions): Promise<SendResult>;
   sendMedia?(target: ChannelTarget, media: ChannelMedia, options?: SendOptions): Promise<SendResult>;
   sendTyping?(target: ChannelTarget, typing: boolean, options?: SendOptions): Promise<void>;
+  sendToolProgress?(target: ChannelTarget, progress: ChannelToolProgress, options?: SendOptions): Promise<SendResult>;
 }
 
 export function buildRouteKey(input: {

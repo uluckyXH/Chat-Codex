@@ -258,8 +258,8 @@ WeixinAdapter implements ChannelAdapter
 - 登录轮询支持 `need_verifycode` 分支；CLI 会提示输入手机微信显示的配对数字后继续轮询。
 - 登录 token 默认保存在用户状态目录 `~/.chat-codex/state/channels/weixin/...`，不写入项目目录或 Git 跟踪文件。
 - 账号 ID 会做文件名安全归一化，例如 `abc@im.bot` 归一化为 `abc-im-bot`。
-- `context_token` 会从微信入站消息带入 `ChannelTarget.context.contextToken`，但文本、图片和文件发送默认不回传给 `sendmessage`；它只作为观测、调试和后续兼容回退字段。typing 可继续单独使用该字段请求 `typing_ticket`，但 typing 失败不影响消息投递。
-- typing 使用 `getconfig` 获取 `typing_ticket`，再调用 `sendtyping`。Bridge 在 Codex 运行期间每 5 秒续发一次 typing start，任务完成或 `/stop` 后发送 typing stop；typing 失败只记录警告，不中断 Codex 正常回复。
+- `context_token` 会从微信入站消息带入 `ChannelTarget.context.contextToken`；文本、图片和文件发送会带回该字段，使回复尽量关联到当前微信上下文。如果带 token 的发送最终遇到 `ret=-2`，会去掉 `context_token` fallback 一次。
+- typing 使用 `getconfig` 获取 `typing_ticket`，再调用 `sendtyping`。Bridge 在 Codex 运行期间每 5 秒调用一次 typing start；微信 adapter 在自己的异步队列里复用当前有效 ticket，必要时才调用 `getconfig(context_token)` 取票，然后发送 typing，不阻塞 Codex 正常回复。`getconfig` 不视为 `context_token` 续期接口；任务完成或 `/stop` 后发送 typing stop，stop 只复用最近一次有效 ticket。
 - 当前没有定时刷新 token 的协议；登录后复用服务端返回的 `bot_token`。如果 `getupdates` 返回 session 失效码 `-14`，通道状态切换为 `login_required`，停止当前轮询，等待用户重新扫码登录。旧 token 会保留，用于下一次二维码登录时作为 `local_token_list` 传给服务端识别已绑定账号。
 - `weixin status` 会读取本地账号凭证但不启动长轮询；有凭证时显示 `connected`，无凭证时显示 `login_required`。
 
@@ -674,7 +674,7 @@ src/channels/<channel-id>/
 - 已实现从 `$CODEX_HOME/state_5.sqlite`、`$CODEX_HOME/session_index.jsonl` 和 `$CODEX_HOME/sessions/**/*.jsonl` 发现历史会话，并优先展示 Codex 保存的标题或首条用户消息。
 - 已实现 `terminal codex` 启动时先选会话、再选权限模式，并在启动摘要里显示本次会话、工作目录、权限和进度模式。
 - 已用中间件真实调用 `codex exec --json` 并收到回复。
-- `chat-codex` 启动入口已启用运行期 transcript：Bridge 收到微信消息、向微信发送回复、发送媒体，以及遇到被微信策略抑制的 Codex 进度时，都会以彩色聊天记录样式同步打印到启动中间件的终端；被抑制的进度标记为“本地进度（未投递）”，默认非 TTY 输出保持纯文本，方便重定向日志。
+- `chat-codex` 启动入口已启用运行期 transcript：Bridge 收到微信消息、向微信发送回复、发送媒体，以及遇到被微信策略抑制的普通文本进度时，都会以彩色聊天记录样式同步打印到启动中间件的终端；被抑制的进度标记为“本地进度（未投递）”，默认非 TTY 输出保持纯文本，方便重定向日志。
 - 已把 `codex exec --json` 中可见的 reasoning summary、命令、工具、文件变更等事件转换为通用 progress 事件；是否投递到具体渠道由 `ChannelDeliveryPolicy` 决定。
 
 限制：
@@ -904,7 +904,7 @@ Status: idle
 - Channel Adapter 状态。
 - Codex Adapter 状态，包括模型信息、reasoning effort，以及 app-server `thread/tokenUsage/updated` 提供的 token 用量。`tokenUsage.total` 是累计 API 用量，不能当作当前上下文窗口占用；`/status` 用 `tokenUsage.last` 近似当前窗口，并把累计量单独展示为“本会话累计 token”。“最近一轮 token”的输出是最近一次 token usage 更新里的输出 token，累计输出看“本会话累计 token”的输出。
 
-普通用户输出：
+普通用户输出（微信 2.4.4 默认 silent 状态）：
 
 ```md
 **Codex 状态**
@@ -922,7 +922,7 @@ Status: idle
 - 处理状态: 正在处理
 - 排队消息: `0`
 - 待审批: `0`
-- 进度投递: 已禁用（微信渠道不投递进度）
+- 进度投递: 静默模式
 - 权限模式: 审批模式（沙箱 `workspace-write`）
 - 可用操作: 发送 `/stop` 终止当前任务
 
@@ -931,7 +931,7 @@ Status: idle
 - 连接状态: 已连接
 ```
 
-管理员输出：
+管理员输出（微信 2.4.4 默认 silent 状态）：
 
 ```md
 **Codex 状态**
@@ -949,7 +949,7 @@ Status: idle
 - 处理状态: 正在处理
 - 排队消息: `0`
 - 待审批: `0`
-- 进度投递: 已禁用（微信渠道不投递进度）
+- 进度投递: 静默模式
 - 权限模式: 审批模式（沙箱 `workspace-write`）
 
 **渠道**
@@ -1103,10 +1103,10 @@ CLI JSONL adapter 可用事件：
 - `turn.failed`
 - `error`
 
-当前 CLI JSONL adapter 的阶段性输出（非微信渠道会按投递模式发送；微信渠道会在 Bridge 层丢弃 task-start 和 progress）：
+当前 CLI JSONL adapter 的阶段性输出（当前主干里非微信渠道会按投递模式发送；微信渠道会在 Bridge 层丢弃 task-start 和 progress）：
 
 - `turn.started`：非微信渠道由 Bridge 发送简短“Codex 正在处理这条消息”提示，不在每次任务开始时重复刷 Session ID；微信渠道不发送这条提示。
-- `item.completed` + `reasoning`：发送 `Codex 进度`，内容为 Codex 提供的 reasoning summary；兼容 `summary`、`summary_text`、顶层 `codex_thinking` 等不同 JSONL 形态。
+- `item.completed` + `reasoning`：发送普通文本进度，内容为 Codex 提供的 reasoning summary；兼容 `summary`、`summary_text`、顶层 `codex_thinking` 等不同 JSONL 形态。
 - `item.updated` + `plan_update`：发送计划更新，归类为 brief 模式可见的自言自语/计划进度。
 - `item.started/completed` + `command_execution`：发送命令开始或完成摘要；命令输出中的图片或文件路径只作为进度文本，不触发媒体发送。
 - `item.completed` + `file_change`：发送文件变更摘要。
@@ -1116,9 +1116,10 @@ Bridge 会把进度事件标记为 `reasoning`、`todo`、`search`、`file_chang
 
 - `brief`：默认模式，只投递计划/自言自语、搜索和文件变更摘要，不投递命令/工具细节。
 - `detailed`：调试模式，投递全部可见进度，包括命令开始/完成和工具调用。
-- `silent`：安静模式，不投递进度文本；非微信渠道仍会发送开始处理、审批和最终回复。文件发送只由 `/sendfile` 单次授权触发，不归 progress 模式控制。
+- `tools`：只投递结构化工具生命周期，不投递普通文本进度；仅在渠道策略 `toolProgress: "send"` 时有实际输出。
+- `silent`：安静模式，不投递进度文本，也不投递结构化工具生命周期；仍会发送审批、错误、安全通知、命令回复、`request_user_input` 和最终回复。文件发送只由 `/sendfile` 单次授权触发，不归 progress 模式控制。
 
-非微信渠道可通过 `/progress [brief|detailed|silent]` 为当前 route 调整模式；CLI 可通过 `--progress brief|detailed|silent` 设置默认模式。微信渠道固定禁用任务开始提示和阶段性进度，收到 `/progress` 时返回拒绝说明，不改变模式。微信专用 `/fff` 是静默刷新命令，不回复、不入队、不转发给 Codex。
+非微信渠道可通过 `/progress [brief|detailed|silent]` 为当前 route 调整普通文本进度模式；微信 2.4.4 实验分支支持 `/progress [brief|detailed|tools|silent]`，默认持久模式为 `silent`。CLI 可通过 `--progress brief|detailed|tools|silent` 设置默认模式，其中 `tools` 仅在支持结构化工具生命周期的渠道有效。微信专用 `/fff` 是静默刷新命令，不回复、不入队、不转发给 Codex。
 
 app-server adapter 可用事件：
 
@@ -1143,21 +1144,25 @@ app-server adapter 可用事件：
 
 ### 8.2.2 微信发送策略
 
-微信不适合逐 token 或高频连续发送。当前微信策略是只投递关键消息，不投递 task-start 和 progress：
+微信不适合逐 token 或高频连续发送。微信 2.4.4 实验分支的策略是保留关键消息，同时按 route 进度模式控制普通文本 progress 和结构化工具生命周期：
 
-- task-start 和 `assistant.progress` 不发送到微信。
-- Plan mode 的最终 `assistant.plan` 会作为关键最终内容发送，不受 progress suppressed 影响。
+- task-start 不发送到微信。
+- 默认持久模式为 `silent`：不发送普通文本进度，也不发送 `TOOL_CALL_START/TOOL_CALL_RESULT`。
+- `/progress brief` 发送摘要普通文本进度，不发送结构化工具生命周期。
+- `/progress detailed` 发送完整可见文本进度，并发送结构化工具生命周期。
+- `/progress silent` 不发送普通文本进度，也不发送结构化工具生命周期。
+- `/plan` turn 可以临时使用 detailed effective mode，发送计划过程和结构化工具生命周期，但不改 route 持久化配置；如果 route 为 `silent`，仍保持静默。
+- Plan mode 的最终 `assistant.plan` 会作为关键最终内容发送，不受 progress 模式影响。
 - final answer、turn failed/error、审批提示、审批处理结果、队列提示、媒体发送结果和用户主动命令回复仍发送。
-- `/progress` 在微信中不可用；`/status` 显示 Progress 为 `disabled`。
 - `/fff` 在微信中静默处理，作为用户主动入站触发，不产生回复。
-- 非微信渠道仍可按 `brief`、`detailed`、`silent` 投递 progress。
+- 非微信渠道仍按自身 delivery policy 投递 progress，默认不理解微信 `TOOL_CALL_START/RESULT`。
 - 普通消息、阶段性输出和最终回复里的路径默认只当文本，不自动发送媒体。用户发送 `/sendfile <任务内容>` 时，Bridge 会给该 turn 追加内部协议提示，只在最终回复中解析 `BRIDGE_SEND_FILE: /absolute/path/to/file`，每轮最多发送 3 个文件，并从用户可见最终文本中移除协议行。若媒体上传失败，只发送一条聚合失败摘要，不逐个文件刷 fallback 文本。
 - Codex 运行期间启用微信 typing：`getconfig` 获取 ticket，`sendtyping` 周期续发；turn 完成、失败或 `/stop` 后停止 typing。
 - `WeixinAdapter` 出站发送采用单队列串行和最小发送间隔，降低连续消息在微信侧丢显或乱序的概率。
 - `sendmessage`、`getuploadurl` 的 HTTP 200 不直接视为成功；若 JSON 里 `ret/errcode` 非 0，会抛错并更新通道 `lastError`，避免终端 transcript 把失败请求打印成成功 OUT。
 - 终端 transcript 默认使用一行方向摘要加缩进消息体，例如 `微信 <= Alice | direct:...` 和 `微信 => direct:... | 进度`；TTY 下用颜色区分用户入站、Codex 回复、进度、审批、错误和媒体，完整 route/sender 只在 verbose 模式下展示。
 - WeixinAdapter 对 `sendmessage` 串行排队，默认最小发送间隔为 1200ms；遇到 45009 等限流错误、429/5xx 或临时网络错误时按退避重试，最终失败才更新通道 `state=degraded` 和 `lastError`。
-- 文本、图片和文件发送采用直接投递模型，默认不携带 `context_token`；如果未来某条兼容路径带 token 且因 `ret=-2` 失败，保留去掉 token 再试一次的 fallback。
+- 文本、图片和文件发送采用直接投递模型，会携带当前入站消息的 `context_token`；如果带 token 的发送因 `ret=-2` 最终失败，保留去掉 token 再试一次的 fallback。
 
 ### 8.2.3 用户可见模式
 

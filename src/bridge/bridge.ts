@@ -203,6 +203,7 @@ export class Bridge {
       currentCollaborationMode: (routeKey) => this.routeCollaborationModes.get(routeKey),
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
+      shouldDeliverToolProgressWithPolicy: (policy, routeKey) => this.shouldDeliverToolProgressWithPolicy(policy, routeKey),
       progressDelivery: this.progressDelivery,
       notificationDelivery: this.notificationDelivery,
       pendingInput: this.pendingInput,
@@ -218,6 +219,7 @@ export class Bridge {
       routeTargets: this.routeTargets,
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       shouldDeliverProgressWithPolicy: (policy, routeKey, kind) => this.shouldDeliverProgressWithPolicy(policy, routeKey, kind),
+      shouldDeliverToolProgressWithPolicy: (policy, routeKey) => this.shouldDeliverToolProgressWithPolicy(policy, routeKey),
       progressDelivery: this.progressDelivery,
       notificationDelivery: this.notificationDelivery,
       pendingInput: this.pendingInput,
@@ -295,6 +297,7 @@ export class Bridge {
           delivery: this.delivery,
           statusText: this.statusTextRenderer,
           setProgressMode: (routeKey, mode) => this.routeProgressModes.set(routeKey, mode),
+          deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
         }, message, target, rawMode),
         contextRefresh: (message, target, rawMode) => handleContextRefreshCommand({
           state: this.state,
@@ -599,7 +602,11 @@ export class Bridge {
   }
 
   private progressModeFor(routeKey: string): ProgressDeliveryMode {
-    return this.routeProgressModes.get(routeKey) ?? this.defaultProgressMode;
+    const explicit = this.routeProgressModes.get(routeKey);
+    if (explicit) return explicit;
+    const policyDefault = this.deliveryPolicyFor(this.routeMessages.get(routeKey)).defaultProgressMode;
+    if (isProgressDeliveryMode(policyDefault)) return policyDefault;
+    return this.defaultProgressMode;
   }
 
   private collaborationModeForRoute(routeKey: string, sessionId?: string): CodexCollaborationMode {
@@ -637,7 +644,19 @@ export class Bridge {
     kind: CodexProgressKind | undefined,
   ): boolean {
     if (policy.progress === "suppress") return false;
+    const mode = this.progressModeFor(routeKey);
+    if (mode === "silent") return false;
+    if (this.collaborationModeForRoute(routeKey) === "plan") return true;
+    if (mode === "tools") return false;
     return this.statusTextRenderer.shouldDeliverProgress(routeKey, kind);
+  }
+
+  private shouldDeliverToolProgressWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean {
+    if (policy.toolProgress !== "send") return false;
+    const mode = this.progressModeFor(routeKey);
+    if (mode === "silent") return false;
+    if (this.collaborationModeForRoute(routeKey) === "plan") return true;
+    return mode === "tools" || mode === "detailed";
   }
 
   private runPolicyStatus(sessionId?: string): CodexRunPolicyStatus | undefined {
@@ -649,6 +668,10 @@ export class Bridge {
     const policy = this.state.getSessionRunPolicy(sessionId);
     if (policy) this.codex.setRunPolicy?.(policy, sessionId);
   }
+}
+
+function isProgressDeliveryMode(value: unknown): value is ProgressDeliveryMode {
+  return value === "brief" || value === "detailed" || value === "tools" || value === "silent";
 }
 
 function isFeishuDirectMessage(message: ChannelMessage): boolean {

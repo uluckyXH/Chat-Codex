@@ -6,7 +6,7 @@ import { Writable } from "node:stream";
 import React from "react";
 import { render } from "ink-testing-library";
 import { ChatCodexTui } from "../../src/cli/tui/app.js";
-import { RuntimeLogStore, RuntimeLogView, RuntimeTuiTranscriptSink } from "../../src/cli/tui/runtime-log.js";
+import { RuntimeLogStore, RuntimeLogView, RuntimeTuiLogger, RuntimeTuiTranscriptSink } from "../../src/cli/tui/runtime-log.js";
 import { runRuntimeLogTui } from "../../src/cli/tui/run-runtime-log.js";
 import type { LauncherActions, LauncherDashboard } from "../../src/cli/actions/launcher-actions.js";
 import type { ContextRefreshEffectivePolicy, ContextRefreshPolicy } from "../../src/context-refresh/types.js";
@@ -573,6 +573,33 @@ test("Runtime TUI renders startup summary and transcript logs", async () => {
   assert.match(cleanFrame(view), /群消息/);
   assert.match(cleanFrame(view), /Ctrl\+C 停止服务/);
   assert.doesNotMatch(cleanFrame(view), /q\/Esc 停止/);
+
+  view.unmount();
+});
+
+test("Runtime TUI renders warning logs as warnings", async () => {
+  const store = new RuntimeLogStore();
+  const logger = new RuntimeTuiLogger(store);
+  logger.warn("channel text send failed", {
+    channel: "weixin",
+    routeKey: "weixin:abc:direct:user",
+    error: "sendmessage failed: ret=-2 errcode=0",
+  });
+
+  const view = render(<RuntimeLogView summary={{
+    title: `${expectedChatCodexTitle()} 运行中`,
+    channels: ["weixin"],
+    cwd: "/repo",
+    policy: { permissionMode: "approval", sandbox: "workspace-write" },
+    routePolicy: "首条消息自动创建新 session",
+    codexStatus: codexStatusFixture(),
+  }} store={store} />);
+  await waitForInk();
+
+  const frame = cleanFrame(view);
+  assert.match(frame, /警告\s+WARN/);
+  assert.match(frame, /channel text send failed/);
+  assert.match(frame, /routeKey=weixin:abc:direct:user/);
 
   view.unmount();
 });

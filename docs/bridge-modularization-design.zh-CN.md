@@ -36,7 +36,7 @@
 - 不新增聊天命令。
 - 不改变 route/session 独占绑定规则。
 - 不改变 `/sendfile` 协议和文件发送安全限制。
-- 不改变微信/飞书投递策略。
+- 不改变当前主干微信/飞书投递策略；微信 2.4.4 结构化进度属于后续专项适配。
 - 不改变状态持久化目录。
 - 不改变 TUI/CLI 交互语义。
 - 不重写 Bridge 核心流程。
@@ -50,7 +50,7 @@
 - 现有测试继续通过。
 - 聊天内命令输出文案保持兼容。
 - route/session 绑定、审批、文件发送、Goal、model、permission 等行为保持不变。
-- 微信 progress suppress、飞书 progress/typing、媒体发送等渠道差异保持不变。
+- 当前主干微信 progress suppress、飞书 progress/typing、媒体发送等渠道差异保持不变。
 
 ### Bridge 做路由
 
@@ -383,7 +383,7 @@ npm test
 验证重点：
 
 - `bridge-mock` 状态、帮助、进度、权限相关测试。
-- 微信 progress disabled help/status 测试。
+- 微信 2.4.4 实验分支 help/status 测试：默认 silent，并覆盖 brief/detailed/tools 展示。
 
 ### 阶段 3：拆命令模块和 command router
 
@@ -544,7 +544,7 @@ npm test
 - `/sendfile`
 - `/progress`
 - 微信 `/fff`
-- 微信 progress disabled。
+- 微信 2.4.4 默认 silent，并支持 `/progress brief|detailed|tools|silent`。
 - 飞书 progress modes。
 - 飞书 typing reaction。
 - approval retry。
@@ -575,19 +575,19 @@ npm test
 | --- | --- |
 | `bridge-types.ts` | 类型迁移后编译通过；跨模块共享类型没有循环依赖；默认常量与原行为一致。 |
 | `formatters.ts` | 路径压缩、权限文案、Goal 时间、model policy、progress mode、审批类型、百分比、耗时、数字和上下文用量格式化。 |
-| `status-text.ts` | `/status`、`/sessions`、`/whoami`、`/debug`、`/help` 输出关键文本；微信 progress disabled 和飞书 progress mode 展示保持一致。 |
+| `status-text.ts` | `/status`、`/sessions`、`/whoami`、`/debug`、`/help` 输出关键文本；微信 2.4.4 默认 silent、brief/detailed/tools 和飞书 progress mode 展示保持一致。 |
 | `command-router.ts` | slash command 分发、unknown command、route busy mutation guard、refresh command、平台特殊命令、审批命令入口。 |
 | `commands/goal-command.ts` | `/goal`、`/goal pause`、`/goal resume`、`/goal clear`、goal 状态时间、错误文案和后台 Goal 状态展示。 |
 | `commands/model-command.ts` | `/model` 列表、模型切换、默认模型、reasoning effort 设置和非法参数提示。 |
 | `commands/permission-command.ts` | `/permission` 展示、approval/full 模式切换、session 级权限保存和恢复。 |
-| `commands/progress-command.ts` | `/progress brief`、`/progress detailed`、`/progress silent`、飞书可用、微信禁用提示。 |
+| `commands/progress-command.ts` | `/progress brief`、`/progress detailed`、`/progress tools`、`/progress silent`；微信 2.4.4 默认 silent，非结构化工具渠道不展示 tools。 |
 | `commands/collaboration-command.ts` | `/plan`、`/code` 进入对应协作模式；inline prompt 继续投递到当前 route。 |
 | `commands/sendfile-command.ts` | `/sendfile` 只对本轮生效；协议 instruction 拼接正确；参数错误提示正确。 |
 | `session-flow.ts` | 新 session、resume/use、session selection、owner 冲突、pending 微信主聊天绑定、重启恢复绑定、新 session 工作目录取启动 cwd。 |
 | `route-queue.ts` | 同 route 串行、不同 route 并发、排队提示、worker 清理、`/stop` 取消当前 turn 并清空队列。 |
 | `route-steering.ts` | 执行中 steer、debounce、batch、steer rejected fallback、route scope、busy guard、`/stop` 清理 steer 队列。 |
 | `background-turns.ts` | Goal background final、background progress、与普通 route queue 并存、完成后状态清理、progress suppress。 |
-| `delivery.ts` | 文本发送失败处理、progress suppress cooldown、approval retry、飞书 typing、微信不发 progress、文件/媒体发送、`BRIDGE_SEND_FILE` 协议行剥离和失败聚合。 |
+| `delivery.ts` | 文本发送失败处理、progress suppress cooldown、approval retry、飞书 typing、微信 2.4.4 结构化工具进度、文件/媒体发送、`BRIDGE_SEND_FILE` 协议行剥离和失败聚合。 |
 | `bridge.ts` | 构造依赖、start/stop、handleMessage 一级分流、普通消息/媒体消息/命令消息路由、waitForIdle 和整体集成行为。 |
 
 如果某个模块拆分时发现现有测试无法覆盖迁移风险，必须先补测试，再继续拆分下一模块。

@@ -50,6 +50,18 @@ getDeliveryPolicy?(message?: ChannelMessage): ChannelDeliveryPolicy;
 - `progressCommand: "enabled"`
 - `refreshCommands: []`
 
+微信 2.4.4 结构化工具进度适配时，计划额外扩展一类工具生命周期策略，例如：
+
+```ts
+type ChannelToolProgressDelivery = "send" | "suppress";
+
+interface ChannelDeliveryPolicy {
+  toolProgress?: ChannelToolProgressDelivery;
+}
+```
+
+该字段只表达结构化工具生命周期是否发送，不等同于普通文本 progress。普通文本 progress 仍由 `progress` 和 route 级 `/progress` 模式控制。
+
 ## 当前渠道策略
 
 ### 默认/Terminal/Mock
@@ -57,7 +69,7 @@ getDeliveryPolicy?(message?: ChannelMessage): ChannelDeliveryPolicy;
 默认策略完整投递：
 
 - 发送 task-start。
-- 按 `/progress brief|detailed|silent` 投递 progress。
+- 按 `/progress brief|detailed|silent` 投递普通文本 progress。
 - `/progress` 可用。
 - 无额外 refresh 命令。
 
@@ -65,13 +77,22 @@ Terminal 因此能继续看到 Codex plan、reasoning summary、search、file ch
 
 ### Weixin
 
-WeixinAdapter 返回微信专属策略：
+微信 2.4.4 实验分支中，WeixinAdapter 返回微信专属低噪声策略：
 
 - `taskStart: "suppress"`：不发送 `Codex 正在处理这条消息。`
-- `progress: "suppress"`：不发送 `Codex 进度:`
-- `progressCommand: "disabled"`：微信中 `/progress` 返回拒绝说明，不改变模式。
+- `progress: "send"`：允许普通文本进度按 route 模式投递。
+- `toolProgress: "send"`：允许结构化工具生命周期投递。
+- `progressCommand: "enabled"`：微信中 `/progress` 可配置 `brief/detailed/tools/silent`。
+- `defaultProgressMode: "silent"`：默认不发送普通文本进度和结构化工具生命周期，只保留关键交互与最终回复。
 - `refreshCommands: [{ command: "fff", silent: true }]`：`/fff` 静默处理，不回复、不入队、不转发给 Codex。
-- `/status` 显示 `进度投递: 已禁用（微信渠道不投递进度）`。
+- `/status` 显示 `进度投递: 静默模式`。
+
+微信 2.4.4 实验分支的目标不是把这个低噪声策略扩大到其它渠道，而是在微信 adapter 内独立放开：
+
+- 普通文本进度：支持 `/progress brief|detailed|silent`，用于实测微信在 `context_token/run_id/typing keepalive` 链路下的承载能力。
+- 结构化工具进度：新增 `/progress tools`，只发送 `TOOL_CALL_START/TOOL_CALL_RESULT` 这类工具生命周期，不携带 stdout/stderr 摘要。
+- 默认持久模式建议保持低噪声，例如 `/progress silent`；需要实验结构化工具生命周期时再手动切到 `/progress tools`。
+- `/plan` 可以对当前 turn 使用临时 detailed effective mode，但不改 route 持久化 `/progress` 配置。
 
 微信仍发送关键消息：
 

@@ -67,7 +67,10 @@ export class BridgeProgressDelivery {
       this.transcript?.localProgress?.(input.target, this.formatProgress([body]));
       return;
     }
-    if (!this.shouldDeliverProgress(input.policy, input.routeKey, input.kind)) return;
+    if (!this.shouldDeliverProgress(input.policy, input.routeKey, input.kind)) {
+      this.transcript?.localProgress?.(input.target, this.formatProgress([body]));
+      return;
+    }
 
     const state = this.stateFor(input.routeKey);
     const normalized = normalizeProgressText(body);
@@ -118,7 +121,7 @@ export class BridgeProgressDelivery {
       .map((text) => text.trim())
       .filter(Boolean)
       .join("\n\n");
-    return `Codex 进度:\n${truncateForChannel(body, this.maxProgressChars)}`;
+    return truncateForChannel(body, this.maxProgressChars);
   }
 
   private hasRecent(state: RouteProgressState, normalized: string): boolean {

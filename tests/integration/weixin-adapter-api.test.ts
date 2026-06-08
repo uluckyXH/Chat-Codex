@@ -26,6 +26,12 @@ function bodyAsBuffer(body: unknown): Buffer {
   throw new Error(`unsupported body type: ${typeof body}`);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 test("WeixinAdapter starts QR login, waits for confirmation, and stores account credentials", async () => {
   const store = new FileWeixinAccountStore(tempStateDir());
   const calls: Array<{ url: string; body?: string }> = [];
@@ -99,7 +105,7 @@ test("WeixinAdapter waitLogin returns timeout when QR status polling reaches dea
   assert.equal((await adapter.getStatus()).lastError, "login timeout");
 });
 
-test("WeixinAdapter sends text messages without context token by default", async () => {
+test("WeixinAdapter sends text messages with context token and run id", async () => {
   const store = new FileWeixinAccountStore(tempStateDir());
   store.saveAccount({
     accountId: "abc-im-bot",
@@ -134,7 +140,7 @@ test("WeixinAdapter sends text messages without context token by default", async
     conversation: { id: "user@im.wechat", kind: "direct" },
     recipient: { id: "user@im.wechat" },
     context: { contextToken: "ctx-1" },
-  }, "hello");
+  }, "hello", { correlationId: "run-1" });
 
   const call = calls.find((item) => item.url.includes("sendmessage"));
   assert.ok(call, "sendmessage should be called");
@@ -142,9 +148,56 @@ test("WeixinAdapter sends text messages without context token by default", async
   assert.equal(call.headers.get("Authorization"), "Bearer token-1");
   const body = JSON.parse(call.body ?? "{}");
   assert.equal(body.msg.to_user_id, "user@im.wechat");
-  assert.equal(body.msg.context_token, undefined);
+  assert.equal(body.msg.context_token, "ctx-1");
+  assert.equal(body.msg.run_id, "run-1");
   assert.equal(body.msg.item_list[0].text_item.text, "hello");
   assert.equal(result.channelId, "weixin");
+});
+
+test("WeixinAdapter sends structured tool progress with context token and run id", async () => {
+  const store = new FileWeixinAccountStore(tempStateDir());
+  store.saveAccount({
+    accountId: "abc-im-bot",
+    token: "token-1",
+    baseUrl: "https://api.example",
+    savedAt: new Date().toISOString(),
+  });
+  const calls: Array<{ url: string; body?: string }> = [];
+  const fetchImpl: FetchLike = async (input, init) => {
+    calls.push({ url: String(input), body: typeof init?.body === "string" ? init.body : undefined });
+    return jsonResponse({});
+  };
+  const adapter = new WeixinAdapter({
+    baseUrl: "https://api.example",
+    store,
+    pollOnStart: false,
+    outboundMinIntervalMs: 0,
+    apiOptions: { fetch: fetchImpl },
+  });
+  const target = {
+    channelId: "weixin",
+    routeKey: "weixin:abc-im-bot:direct:user@im.wechat",
+    accountId: "abc-im-bot",
+    conversation: { id: "user@im.wechat", kind: "direct" as const },
+    recipient: { id: "user@im.wechat" },
+    context: { contextToken: "ctx-1", runId: "run-1" },
+  };
+
+  await adapter.sendToolProgress(target, { phase: "start", toolName: "command: npm test", toolCallId: "cmd-1" });
+  await adapter.sendToolProgress(target, { phase: "end", toolName: "command: npm test", toolCallId: "cmd-1", status: "completed" });
+
+  const bodies = calls
+    .filter((call) => call.url.includes("sendmessage"))
+    .map((call) => JSON.parse(call.body ?? "{}"));
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].msg.context_token, "ctx-1");
+  assert.equal(bodies[0].msg.run_id, "run-1");
+  assert.equal(bodies[0].msg.item_list[0].type, 11);
+  assert.equal(bodies[0].msg.item_list[0].is_completed, false);
+  assert.equal(bodies[0].msg.item_list[0].tool_call_start_item.tool_call_id, "cmd-1");
+  assert.equal(bodies[1].msg.item_list[0].type, 12);
+  assert.equal(bodies[1].msg.item_list[0].is_completed, true);
+  assert.equal(bodies[1].msg.item_list[0].tool_call_result_item.status, "completed");
 });
 
 test("WeixinAdapter treats sendmessage errcode as delivery failure", async () => {
@@ -271,7 +324,7 @@ test("WeixinAdapter retries temporary ret=-2 sendmessage failures", async () => 
   assert.equal(status.lastError, undefined);
 });
 
-test("WeixinAdapter ignores target context token for direct text delivery", async () => {
+test("WeixinAdapter includes target context token for direct text delivery", async () => {
   const store = new FileWeixinAccountStore(tempStateDir());
   store.saveAccount({
     accountId: "abc-im-bot",
@@ -309,7 +362,7 @@ test("WeixinAdapter ignores target context token for direct text delivery", asyn
   }, "hello direct delivery");
 
   assert.equal(bodies.length, 1);
-  assert.equal((bodies[0] as { msg?: { context_token?: string } }).msg?.context_token, undefined);
+  assert.equal((bodies[0] as { msg?: { context_token?: string } }).msg?.context_token, "stale-ctx");
 });
 
 test("WeixinAdapter sends typing state with getconfig typing ticket", async () => {
@@ -321,10 +374,82 @@ test("WeixinAdapter sends typing state with getconfig typing ticket", async () =
     savedAt: new Date().toISOString(),
   });
   const calls: Array<{ url: string; body?: string }> = [];
+  let configCount = 0;
+  let now = 1_000;
   const fetchImpl: FetchLike = async (input, init) => {
     const url = String(input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    if (url.includes("getconfig")) return jsonResponse({ typing_ticket: "typing-ticket-1" });
+    if (url.includes("getconfig")) {
+      configCount += 1;
+      return jsonResponse({ typing_ticket: `typing-ticket-${configCount}` });
+    }
+    if (url.includes("sendtyping")) return jsonResponse({});
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const adapter = new WeixinAdapter({
+    baseUrl: "https://api.example",
+    store,
+    pollOnStart: false,
+    outboundMinIntervalMs: 0,
+    now: () => now,
+    apiOptions: { fetch: fetchImpl },
+  });
+  const target = {
+    channelId: "weixin",
+    routeKey: "weixin:abc-im-bot:direct:user@im.wechat",
+    accountId: "abc-im-bot",
+    conversation: { id: "user@im.wechat", kind: "direct" as const },
+    recipient: { id: "user@im.wechat" },
+    context: { contextToken: "ctx-1" },
+  };
+
+  await adapter.sendTyping(target, true);
+  await waitFor(async () => calls.filter((call) => call.url.includes("sendtyping")).length === 1);
+  now += 5_000;
+  await adapter.sendTyping(target, true);
+  await waitFor(async () => calls.filter((call) => call.url.includes("sendtyping")).length === 2);
+  now += 5_000;
+  await adapter.sendTyping(target, true);
+  await waitFor(async () => calls.filter((call) => call.url.includes("sendtyping")).length === 3);
+  await adapter.sendTyping(target, false);
+  await waitFor(async () => calls.filter((call) => call.url.includes("sendtyping")).length === 4);
+
+  const configBody = JSON.parse(calls.find((call) => call.url.includes("getconfig"))?.body ?? "{}");
+  assert.equal(configBody.ilink_user_id, "user@im.wechat");
+  assert.equal(configBody.context_token, "ctx-1");
+  const typingBodies = calls
+    .filter((call) => call.url.includes("sendtyping"))
+    .map((call) => JSON.parse(call.body ?? "{}"));
+  assert.equal(calls.filter((call) => call.url.includes("getconfig")).length, 2);
+  assert.deepEqual(typingBodies.map((body) => body.status), [1, 1, 1, 2]);
+  assert.deepEqual(typingBodies.map((body) => body.typing_ticket), ["typing-ticket-1", "typing-ticket-1", "typing-ticket-2", "typing-ticket-2"]);
+});
+
+test("WeixinAdapter sendTyping does not wait for slow getconfig", async () => {
+  const store = new FileWeixinAccountStore(tempStateDir());
+  store.saveAccount({
+    accountId: "abc-im-bot",
+    token: "token-1",
+    baseUrl: "https://api.example",
+    savedAt: new Date().toISOString(),
+  });
+  const calls: Array<{ url: string; body?: string }> = [];
+  let releaseConfig: (() => void) | undefined;
+  let markConfigStarted: (() => void) | undefined;
+  const configStarted = new Promise<void>((resolve) => {
+    markConfigStarted = resolve;
+  });
+  const configBlocked = new Promise<void>((resolve) => {
+    releaseConfig = resolve;
+  });
+  const fetchImpl: FetchLike = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+    if (url.includes("getconfig")) {
+      markConfigStarted?.();
+      await configBlocked;
+      return jsonResponse({ typing_ticket: "typing-ticket-1" });
+    }
     if (url.includes("sendtyping")) return jsonResponse({});
     throw new Error(`unexpected fetch ${url}`);
   };
@@ -344,18 +469,16 @@ test("WeixinAdapter sends typing state with getconfig typing ticket", async () =
     context: { contextToken: "ctx-1" },
   };
 
-  await adapter.sendTyping(target, true);
-  await adapter.sendTyping(target, false);
+  const sendTypingReturned = await Promise.race([
+    adapter.sendTyping(target, true).then(() => true),
+    sleep(50).then(() => false),
+  ]);
+  assert.equal(sendTypingReturned, true, "sendTyping should return before getconfig finishes");
+  await configStarted;
+  assert.equal(calls.some((call) => call.url.includes("sendtyping")), false);
 
-  const configBody = JSON.parse(calls.find((call) => call.url.includes("getconfig"))?.body ?? "{}");
-  assert.equal(configBody.ilink_user_id, "user@im.wechat");
-  assert.equal(configBody.context_token, "ctx-1");
-  const typingBodies = calls
-    .filter((call) => call.url.includes("sendtyping"))
-    .map((call) => JSON.parse(call.body ?? "{}"));
-  assert.equal(calls.filter((call) => call.url.includes("getconfig")).length, 1);
-  assert.deepEqual(typingBodies.map((body) => body.status), [1, 2]);
-  assert.ok(typingBodies.every((body) => body.typing_ticket === "typing-ticket-1"));
+  releaseConfig?.();
+  await waitFor(async () => calls.some((call) => call.url.includes("sendtyping")));
 });
 
 test("WeixinAdapter uploads and sends image media with caption", async () => {
@@ -431,7 +554,7 @@ test("WeixinAdapter uploads and sends image media with caption", async () => {
     .filter((call) => call.url.includes("sendmessage"))
     .map((call) => JSON.parse(String(call.body)));
   assert.equal(sendBodies.length, 2);
-  assert.ok(sendBodies.every((body) => body.msg.context_token === undefined));
+  assert.ok(sendBodies.every((body) => body.msg.context_token === "ctx-1"));
   assert.equal(sendBodies[0].msg.item_list[0].text_item.text, "截图");
   const imageItem = sendBodies[1].msg.item_list[0];
   assert.equal(imageItem.type, 2);

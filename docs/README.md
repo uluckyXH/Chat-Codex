@@ -77,7 +77,7 @@
   Session 列表展示与分页设计。说明 `/sessions`、`/session`、`/sessions all`、`/resume` 和 `/use` 如何统一列表格式、排序、分页和编号选择交互，避免历史 session 很多时刷屏。
 
 - `progress-noise-control-design.zh-CN.md`
-  Codex 进度噪声控制设计。说明如何识别命令长输出、等待转圈、低信息增量，并通过 app-server adapter 摘要化和 Bridge delivery 限流，避免微信、飞书和 TUI 日志被进度刷屏。
+  进度噪声控制设计。说明如何识别命令长输出、等待转圈、低信息增量，并通过 app-server adapter 摘要化和 Bridge delivery 限流，避免微信、飞书和 TUI 日志被进度刷屏。
 
 - `route-pairing-trust-design.zh-CN.md`
   渠道会话配对信任设计。说明微信/飞书新聊天 route 如何通过本机 TUI/终端配对码完成信任，未配对前不创建 session、不执行命令，只回复不含配对码的配对引导，并按 routeKey 持久化已信任聊天。
@@ -95,7 +95,7 @@
   大型核心文件模块化拆分设计。说明如何继续拆分 `app-server-codex-adapter.ts` 和 `serve.ts`，并沿用“原文件先改名备份、再创建同名入口逐步拆分”的迁移方式。
 
 - `feishu-adapter-design.zh-CN.md`
-  飞书适配设计。说明第一阶段如何用飞书 WebSocket 长连接接入私聊文本消息，并默认投递 Codex 进度。
+  飞书适配设计。说明第一阶段如何用飞书 WebSocket 长连接接入私聊文本消息，并默认投递普通文本进度。
 
 - `feishu-user-name-cache-design.zh-CN.md`
   飞书名称展示与群聊名册设计。说明私聊不解析名称、群聊如何按 `chat_id + open_id` 维护手工成员名册，并统一运行日志、TUI 列表和群聊发言人前缀的兜底格式。
@@ -175,7 +175,7 @@ secrets/feishu.local.md
 16. 做 Codex app-server notification 路由、安全通知完整推送、thread archive/close 主动提示或模型路由提示时读 `codex-app-server-notification-routing-design.zh-CN.md`。
 17. 做 Codex `item/tool/requestUserInput`、聊天侧 `/a数字` 回答、pending input 锁或群聊发起人回答规则时读 `codex-request-user-input-design.zh-CN.md`。
 18. 做 `/sessions`、`/session`、`/sessions all`、`/resume` 或 `/use` 会话列表/选择交互时读 `session-list-pagination-design.zh-CN.md`。
-19. 做 Codex 进度投递、命令输出摘要或 TUI 运行日志刷屏治理时读 `progress-noise-control-design.zh-CN.md`。
+19. 做进度投递、命令输出摘要或 TUI 运行日志刷屏治理时读 `progress-noise-control-design.zh-CN.md`。
 20. 做微信/飞书新聊天配对、route 信任、未授权聊天拦截或信任持久化时读 `route-pairing-trust-design.zh-CN.md`。
 21. 做 Windows 下 Codex CLI 解析、Codex 子进程启动或传给 Codex 的本地路径适配时读 `windows-compatibility.zh-CN.md`。
 22. 做 Bridge 核心拆分时读 `bridge-modularization-design.zh-CN.md`，确认备份旧文件、模块边界、分阶段迁移和行为不变验收标准。

@@ -1,4 +1,5 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
+import { randomUUID } from "node:crypto";
 import type { CodexAdapter, CodexCollaborationMode, CodexProgressKind, CodexPromptInput, CodexSessionStatus } from "../codex/types.js";
 import { codexInputPlainText, codexInputText, withCodexInputText } from "../codex/input.js";
 import type { TranscriptSink } from "../logging/transcript.js";
@@ -38,6 +39,7 @@ export interface BridgeRouteQueueOptions {
     routeKey: string,
     kind: CodexProgressKind | undefined,
   ): boolean;
+  shouldDeliverToolProgressWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
   progressDelivery?: BridgeProgressDelivery;
   notificationDelivery?: BridgeNotificationDelivery;
   pendingInput?: BridgePendingInputManager;
@@ -57,6 +59,7 @@ export class BridgeRouteQueue {
   private readonly deliveryPolicyFor: BridgeRouteQueueOptions["deliveryPolicyFor"];
   private readonly contextRefresh?: SessionContextRefreshManager;
   private readonly progressDelivery: BridgeProgressDelivery;
+  private readonly shouldDeliverToolProgressWithPolicy: BridgeRouteQueueOptions["shouldDeliverToolProgressWithPolicy"];
   private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly pendingInput?: BridgePendingInputManager;
   private readonly queues = new Map<string, QueuedPrompt[]>();
@@ -80,6 +83,7 @@ export class BridgeRouteQueue {
       transcript: this.transcript,
       shouldDeliverProgress: options.shouldDeliverProgressWithPolicy,
     });
+    this.shouldDeliverToolProgressWithPolicy = options.shouldDeliverToolProgressWithPolicy;
     this.notificationDelivery = options.notificationDelivery ?? new BridgeNotificationDelivery({
       state: this.state,
       delivery: this.delivery,
@@ -247,6 +251,7 @@ export class BridgeRouteQueue {
           for await (const event of this.codex.run(session.id, codexPrompt, collaborationMode ? { collaborationMode } : undefined)) {
             if (event.type === "turn.started") {
               currentTurnStartedAt = event.startedAt ?? new Date().toISOString();
+              attachTurnRunId(target, event.turnId);
               this.state.setSessionStatus(session.id, {
                 type: "running",
                 turnId: event.turnId,
@@ -261,6 +266,15 @@ export class BridgeRouteQueue {
                 text: event.text,
                 kind: event.kind,
               });
+            } else if (event.type === "tool.progress") {
+              if (this.shouldDeliverToolProgressWithPolicy(deliveryPolicy, message.routeKey)) {
+                await this.delivery.sendToolProgress(message.routeKey, target, {
+                  phase: event.progress.phase,
+                  toolName: event.progress.toolName,
+                  toolCallId: event.progress.itemId,
+                  status: event.progress.status,
+                });
+              }
             } else if (event.type === "codex.notification") {
               await this.notificationDelivery.deliver({
                 routeKey: message.routeKey,
@@ -357,4 +371,16 @@ export class BridgeRouteQueue {
 
 function isTerminalLifecycleStatus(status: CodexSessionStatus | undefined): boolean {
   return status?.type === "unknown" && (status.detail === "thread archived" || status.detail === "thread closed");
+}
+
+function attachTurnRunId(target: ChannelTarget, turnId: string): void {
+  if (!turnId || !isWeixinChannelId(target.channelId)) return;
+  target.context = {
+    ...target.context,
+    runId: randomUUID(),
+  };
+}
+
+function isWeixinChannelId(channelId: string): boolean {
+  return channelId === "weixin" || channelId.startsWith("weixin-");
 }

@@ -494,6 +494,7 @@ export function formatProgressModeForStatus(mode: ProgressDeliveryMode): string 
   switch (mode) {
     case "brief": return "摘要模式";
     case "detailed": return "详细模式";
+    case "tools": return "工具模式";
     case "silent": return "静默模式";
   }
 }
@@ -503,6 +504,7 @@ export function formatProgressLabelForStatus(label: string): string {
     case "disabled": return "已禁用";
     case "brief": return "摘要模式";
     case "detailed": return "详细模式";
+    case "tools": return "工具模式";
     case "silent": return "静默模式";
     default: return `\`${label}\``;
   }
@@ -620,6 +622,7 @@ export function parseProgressDeliveryMode(value: string): ProgressDeliveryMode |
   const normalized = value.trim().toLowerCase();
   if (normalized === "brief" || normalized === "normal") return "brief";
   if (normalized === "detailed" || normalized === "verbose" || normalized === "debug") return "detailed";
+  if (normalized === "tools" || normalized === "tool") return "tools";
   if (normalized === "silent" || normalized === "quiet" || normalized === "off" || normalized === "none") return "silent";
   return undefined;
 }

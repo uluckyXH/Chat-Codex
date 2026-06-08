@@ -137,6 +137,47 @@ test("app-server turn controller emits notifications even after the turn is clos
   });
 });
 
+test("app-server turn controller maps web search tool progress as completed", async () => {
+  const sessions = new Map();
+  sessions.set("session-1", {
+    session: { id: "session-1", cwd: "/repo", createdAt: "now" },
+    status: { type: "idle" },
+    updatedAt: "now",
+  });
+  const controller = new AppServerTurnController({ sessions, threadToSession: new Map([["thread-1", "session-1"]]) });
+  const queue = new AsyncEventQueue<CodexEvent>();
+  controller.registerTurn("session-1", "turn-1", queue);
+  const iterator = queue[Symbol.asyncIterator]();
+
+  controller.handleNotification({
+    method: "item/started",
+    params: { threadId: "thread-1", turnId: "turn-1", item: { type: "webSearch", id: "search-1" } },
+  });
+  assert.deepEqual(await iterator.next(), {
+    value: {
+      type: "tool.progress",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      progress: { phase: "start", itemId: "search-1", toolName: "web_search" },
+    },
+    done: false,
+  });
+
+  controller.handleNotification({
+    method: "item/completed",
+    params: { threadId: "thread-1", turnId: "turn-1", item: { type: "webSearch", id: "search-1" } },
+  });
+  assert.deepEqual(await iterator.next(), {
+    value: {
+      type: "tool.progress",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      progress: { phase: "end", itemId: "search-1", toolName: "web_search", status: "completed" },
+    },
+    done: false,
+  });
+});
+
 test("app-server rpc client starts stdio server, dispatches responses, notifications, and stop", async () => {
   const dir = await mkdtemp(join(tmpdir(), "chat-codex-rpc-"));
   const bin = join(dir, "fake-codex.mjs");

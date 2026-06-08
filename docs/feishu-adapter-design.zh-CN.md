@@ -10,7 +10,7 @@
 - 通过飞书长连接 WebSocket 接收事件。
 - 支持私聊文本、图片和文件消息。
 - 复用现有 Bridge 的 route/session 绑定、`/new`、`/resume`、`/use`、`/status`、审批和队列能力。
-- 飞书默认投递 Codex 进度信息，和微信默认抑制进度不同。
+- 飞书默认投递普通文本进度信息，和微信默认抑制进度不同。
 
 不在第一阶段做：
 
@@ -201,7 +201,7 @@ getDeliveryPolicy() {
 实际效果：
 
 - `taskStart: "send"`：收到普通任务后发送“Codex 正在处理”。
-- `progress: "send"`：默认投递 Codex 进度。
+- `progress: "send"`：默认投递普通文本进度。
 - `progressCommand: "enabled"`：飞书中允许 `/progress brief|detailed|silent`。
 - 没有微信专用 `/fff` 刷新命令。
 
@@ -542,7 +542,7 @@ Codex Chat Bridge
 8. 给机器人发私聊图片和文件。
 9. 确认飞书里能看到：
    - task-start
-   - Codex 进度
+   - 普通文本进度
    - 最终回复
    - `/status`
    - `/new`

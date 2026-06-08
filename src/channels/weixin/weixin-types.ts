@@ -9,6 +9,8 @@ export const WeixinMessageItemType = {
   VOICE: 3,
   FILE: 4,
   VIDEO: 5,
+  TOOL_CALL_START: 11,
+  TOOL_CALL_RESULT: 12,
 } as const;
 
 export const WeixinMessageType = {
@@ -68,14 +70,30 @@ export interface WeixinVideoItem {
   thumb_width?: number;
 }
 
+export interface WeixinToolCallStartItem {
+  tool_name?: string;
+  tool_call_id?: string;
+}
+
+export interface WeixinToolCallResultItem {
+  tool_name?: string;
+  tool_call_id?: string;
+  status?: "completed" | "failed" | "blocked" | "unknown";
+}
+
 export interface WeixinMessageItem {
   type?: number;
   msg_id?: string;
+  create_time_ms?: number;
+  update_time_ms?: number;
+  is_completed?: boolean;
   text_item?: WeixinTextItem;
   image_item?: WeixinImageItem;
   voice_item?: { text?: string };
   file_item?: WeixinFileItem;
   video_item?: WeixinVideoItem;
+  tool_call_start_item?: WeixinToolCallStartItem;
+  tool_call_result_item?: WeixinToolCallResultItem;
 }
 
 export interface WeixinMessage {
@@ -92,6 +110,7 @@ export interface WeixinMessage {
   message_state?: number;
   item_list?: WeixinMessageItem[];
   context_token?: string;
+  run_id?: string;
 }
 
 export interface WeixinGetUpdatesResponse {

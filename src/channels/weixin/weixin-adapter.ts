@@ -8,6 +8,7 @@ import type {
   ChannelMessageHandler,
   ChannelStatus,
   ChannelTarget,
+  ChannelToolProgress,
   SendOptions,
   SendResult,
 } from "../../protocol/channel.js";
@@ -57,6 +58,7 @@ export interface WeixinAdapterOptions {
   outboundRequestTimeoutMs?: number;
   mediaRequestTimeoutMs?: number;
   inboundMediaRootDir?: string;
+  now?: () => number;
 }
 
 export interface WeixinLoginStartResult extends ChannelLoginResult {
@@ -75,12 +77,14 @@ interface ActiveLogin {
 interface CachedTypingTicket {
   ticket: string;
   expiresAt: number;
+  fetchedAt: number;
 }
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
 const SESSION_EXPIRED_ERRCODE = -14;
 const TYPING_TICKET_TTL_MS = 20 * 60 * 1000;
+const GETCONFIG_PROBE_INTERVAL_MS = 10_000;
 const DEFAULT_OUTBOUND_MIN_INTERVAL_MS = 1200;
 const DEFAULT_OUTBOUND_MAX_RETRIES = 2;
 const DEFAULT_OUTBOUND_RETRY_BASE_DELAY_MS = 1500;
@@ -88,11 +92,10 @@ const DEFAULT_OUTBOUND_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MEDIA_REQUEST_TIMEOUT_MS = 60_000;
 const WEIXIN_DELIVERY_POLICY: ChannelDeliveryPolicy = {
   taskStart: "suppress",
-  progress: "suppress",
-  progressCommand: "disabled",
-  progressDisabledMessage: "微信渠道已禁用进度投递，/progress 在微信中不可用。",
-  statusProgressLabel: "disabled",
-  statusProgressDescription: "微信渠道不投递进度",
+  progress: "send",
+  toolProgress: "send",
+  progressCommand: "enabled",
+  defaultProgressMode: "silent",
   refreshCommands: [
     {
       command: "fff",
@@ -123,12 +126,14 @@ export class WeixinAdapter implements ChannelAdapter {
   private readonly outboundRequestTimeoutMs: number;
   private readonly mediaRequestTimeoutMs: number;
   private readonly inboundMediaRootDir?: string;
+  private readonly now: () => number;
   private handler?: ChannelMessageHandler;
   private status: ChannelStatus;
   private activeLogin?: ActiveLogin;
   private abortController?: AbortController;
   private pollTask?: Promise<void>;
   private outboundQueue: Promise<void> = Promise.resolve();
+  private typingQueue: Promise<void> = Promise.resolve();
   private lastOutboundSentAt = 0;
   private readonly typingTickets = new Map<string, CachedTypingTicket>();
 
@@ -156,6 +161,7 @@ export class WeixinAdapter implements ChannelAdapter {
     this.outboundRequestTimeoutMs = options.outboundRequestTimeoutMs ?? DEFAULT_OUTBOUND_REQUEST_TIMEOUT_MS;
     this.mediaRequestTimeoutMs = options.mediaRequestTimeoutMs ?? DEFAULT_MEDIA_REQUEST_TIMEOUT_MS;
     this.inboundMediaRootDir = options.inboundMediaRootDir;
+    this.now = options.now ?? (() => Date.now());
     this.status = {
       channelId: this.id,
       state: "login_required",
@@ -188,6 +194,7 @@ export class WeixinAdapter implements ChannelAdapter {
   async stop(): Promise<void> {
     this.abortController?.abort();
     await this.outboundQueue.catch(() => undefined);
+    await this.typingQueue.catch(() => undefined);
     const account = this.resolveAccount();
     if (account) {
       try {
@@ -279,7 +286,7 @@ export class WeixinAdapter implements ChannelAdapter {
     this.handler = handler;
   }
 
-  async sendText(target: ChannelTarget, text: string, _options?: SendOptions): Promise<SendResult> {
+  async sendText(target: ChannelTarget, text: string, options?: SendOptions): Promise<SendResult> {
     const account = this.resolveAccount(target.accountId);
     if (!account) {
       throw new Error("WeixinAdapter 未登录：请先运行 weixin login");
@@ -292,6 +299,7 @@ export class WeixinAdapter implements ChannelAdapter {
         client_id: clientId,
         message_type: WeixinMessageType.BOT,
         message_state: WeixinMessageState.FINISH,
+        ...weixinMessageContext(target, options),
         item_list: text ? [{ type: WeixinMessageItemType.TEXT, text_item: { text } }] : undefined,
       },
     };
@@ -312,7 +320,7 @@ export class WeixinAdapter implements ChannelAdapter {
     };
   }
 
-  async sendMedia(target: ChannelTarget, media: ChannelMedia, _options?: SendOptions): Promise<SendResult> {
+  async sendMedia(target: ChannelTarget, media: ChannelMedia, options?: SendOptions): Promise<SendResult> {
     if (media.type !== "image" && media.type !== "file") {
       throw new Error(`WeixinAdapter 当前只支持图片和文件媒体发送: ${media.type}`);
     }
@@ -340,11 +348,42 @@ export class WeixinAdapter implements ChannelAdapter {
       ? buildWeixinImageItem(uploaded)
       : buildWeixinFileItem(uploaded, media.name ?? pathBasename(filePath)));
 
-    const result = await this.sendItems(target, account, items);
+    const result = await this.sendItems(target, account, items, options);
     return {
       ...result,
       raw: { media, uploaded: { filekey: uploaded.filekey, fileSize: uploaded.fileSize } },
     };
+  }
+
+  async sendToolProgress(target: ChannelTarget, progress: ChannelToolProgress, options?: SendOptions): Promise<SendResult> {
+    const account = this.resolveAccount(target.accountId);
+    if (!account) {
+      throw new Error("WeixinAdapter 未登录：请先运行 weixin login");
+    }
+    const now = Date.now();
+    const item: WeixinMessageItem = progress.phase === "start"
+      ? {
+          type: WeixinMessageItemType.TOOL_CALL_START,
+          create_time_ms: now,
+          update_time_ms: now,
+          is_completed: false,
+          tool_call_start_item: {
+            tool_name: progress.toolName,
+            tool_call_id: progress.toolCallId,
+          },
+        }
+      : {
+          type: WeixinMessageItemType.TOOL_CALL_RESULT,
+          create_time_ms: now,
+          update_time_ms: now,
+          is_completed: true,
+          tool_call_result_item: {
+            tool_name: progress.toolName,
+            tool_call_id: progress.toolCallId,
+            status: progress.status ?? "unknown",
+          },
+        };
+    return this.sendItems(target, account, [item], options);
   }
 
   async sendTyping(target: ChannelTarget, typing: boolean, _options?: SendOptions): Promise<void> {
@@ -356,27 +395,43 @@ export class WeixinAdapter implements ChannelAdapter {
     if (!toUserId) {
       throw new Error("WeixinAdapter 无法发送 typing：缺少接收方");
     }
-    try {
-      const ticket = await this.typingTicket(account, target, toUserId);
-      await this.api.sendTyping({
-        token: account.token,
-        timeoutMs: 10_000,
-        body: {
-          ilink_user_id: toUserId,
-          typing_ticket: ticket,
-          status: typing ? 1 : 2,
-        },
+    this.enqueueTyping(account, target, toUserId, typing);
+  }
+
+  private enqueueTyping(account: StoredWeixinAccount, target: ChannelTarget, toUserId: string, typing: boolean): void {
+    this.typingQueue = this.typingQueue
+      .then(() => this.sendTypingNow(account, target, toUserId, typing))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.status = {
+          ...this.status,
+          state: "degraded",
+          account: account.accountId,
+          lastError: message,
+          details: this.statusDetails("typing-failed"),
+        };
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.status = {
-        ...this.status,
-        state: "degraded",
-        account: account.accountId,
-        lastError: message,
-      };
-      throw error;
-    }
+  }
+
+  private async sendTypingNow(
+    account: StoredWeixinAccount,
+    target: ChannelTarget,
+    toUserId: string,
+    typing: boolean,
+  ): Promise<void> {
+    const ticket = typing
+      ? await this.typingTicket(account, target, toUserId, { probe: true })
+      : this.cachedTypingTicket(account, target, toUserId);
+    if (!ticket) return;
+    await this.api.sendTyping({
+      token: account.token,
+      timeoutMs: 10_000,
+      body: {
+        ilink_user_id: toUserId,
+        typing_ticket: ticket,
+        status: typing ? 1 : 2,
+      },
+    });
   }
 
   hasMessageHandler(): boolean {
@@ -515,6 +570,7 @@ export class WeixinAdapter implements ChannelAdapter {
     target: ChannelTarget,
     account: StoredWeixinAccount,
     items: WeixinMessageItem[],
+    options?: SendOptions,
   ): Promise<SendResult> {
     let lastClientId = "";
     let lastBody: WeixinSendMessageRequest | undefined;
@@ -527,6 +583,7 @@ export class WeixinAdapter implements ChannelAdapter {
           client_id: lastClientId,
           message_type: WeixinMessageType.BOT,
           message_state: WeixinMessageState.FINISH,
+          ...weixinMessageContext(target, options),
           item_list: [item],
         },
       };
@@ -558,11 +615,17 @@ export class WeixinAdapter implements ChannelAdapter {
     account: StoredWeixinAccount,
     target: ChannelTarget,
     toUserId: string,
+    options: { probe?: boolean } = {},
   ): Promise<string> {
     const contextToken = typeof target.context?.contextToken === "string" ? target.context.contextToken : undefined;
     const cacheKey = [account.accountId, toUserId, contextToken ?? ""].join(":");
     const cached = this.typingTickets.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.ticket;
+    const now = this.now();
+    if (cached && cached.expiresAt > now) {
+      if (!options.probe || now - cached.fetchedAt < GETCONFIG_PROBE_INTERVAL_MS) {
+        return cached.ticket;
+      }
+    }
     const config = await this.api.getConfig({
       token: account.token,
       timeoutMs: 10_000,
@@ -575,11 +638,21 @@ export class WeixinAdapter implements ChannelAdapter {
     if (!ticket) {
       throw new Error("getconfig response missing typing_ticket");
     }
+    const fetchedAt = this.now();
     this.typingTickets.set(cacheKey, {
       ticket,
-      expiresAt: Date.now() + TYPING_TICKET_TTL_MS,
+      fetchedAt,
+      expiresAt: fetchedAt + TYPING_TICKET_TTL_MS,
     });
     return ticket;
+  }
+
+  private cachedTypingTicket(account: StoredWeixinAccount, target: ChannelTarget, toUserId: string): string | undefined {
+    const contextToken = typeof target.context?.contextToken === "string" ? target.context.contextToken : undefined;
+    const cacheKey = [account.accountId, toUserId, contextToken ?? ""].join(":");
+    const cached = this.typingTickets.get(cacheKey);
+    if (cached && cached.expiresAt > this.now()) return cached.ticket;
+    return undefined;
   }
 
   private async sendRawMessage(account: StoredWeixinAccount, body: WeixinSendMessageRequest): Promise<void> {
@@ -758,6 +831,20 @@ function withoutContextToken(body: WeixinSendMessageRequest): WeixinSendMessageR
     ...body,
     msg: body.msg ? { ...body.msg, context_token: undefined } : undefined,
   };
+}
+
+function weixinMessageContext(target: ChannelTarget, options?: SendOptions): Pick<WeixinMessage, "context_token" | "run_id"> {
+  const contextToken = stringContextValue(target, "contextToken");
+  const runId = options?.correlationId ?? stringContextValue(target, "runId");
+  return {
+    ...(contextToken ? { context_token: contextToken } : {}),
+    ...(runId ? { run_id: runId } : {}),
+  };
+}
+
+function stringContextValue(target: ChannelTarget, key: string): string | undefined {
+  const value = target.context?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function retryDelayMs(baseDelayMs: number, attempt: number): number {

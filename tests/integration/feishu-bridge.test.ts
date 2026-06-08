@@ -46,7 +46,8 @@ test("Feishu private chat uses Bridge commands and default progress delivery", a
   assert.ok(texts.some((text) => text.includes("/group on|off")));
   assert.equal(texts.some((text) => text.includes("/grop")), false);
   assert.ok(texts.some((text) => text.includes("Codex 正在处理这条消息。")));
-  assert.ok(texts.some((text) => text.includes("Codex 进度:") && text.includes("正在分析飞书私聊消息。")));
+  assert.ok(texts.some((text) => text.includes("正在分析飞书私聊消息。")));
+  assert.equal(texts.some((text) => text.includes("Codex 进度:")), false);
   assert.ok(texts.some((text) => text.includes("完成: 请处理这个任务")));
   assert.ok(texts.some((text) => text.includes("**Codex 状态**") && text.includes("- 渠道: `feishu`")));
   assert.deepEqual(factory.client.reactionCreatePayloads.map((payload) => payload.path.message_id), ["om_prompt"]);

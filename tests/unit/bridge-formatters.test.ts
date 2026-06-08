@@ -22,6 +22,8 @@ import {
 test("bridge formatters parse progress and model command values", () => {
   assert.equal(parseProgressDeliveryMode("normal"), "brief");
   assert.equal(parseProgressDeliveryMode("verbose"), "detailed");
+  assert.equal(parseProgressDeliveryMode("tool"), "tools");
+  assert.equal(parseProgressDeliveryMode("tools"), "tools");
   assert.equal(parseProgressDeliveryMode("off"), "silent");
   assert.equal(parseProgressDeliveryMode("unknown"), undefined);
 

@@ -48,6 +48,7 @@ test("BridgeProgressDelivery suppresses command progress in brief mode", async (
 
   assert.equal(fixture.sentTexts.length, 1);
   assert.match(fixture.sentTexts[0], /正在分析/);
+  assert.equal(fixture.sentTexts[0]?.includes("Codex 进度:"), false);
   assert.equal(fixture.sentTexts.some((text) => text.includes("命令完成")), false);
 });
 
@@ -128,6 +129,22 @@ test("BridgeProgressDelivery records suppressed channel progress locally", async
   assert.deepEqual(fixture.sentTexts, []);
   assert.equal(fixture.transcript.local.length, 1);
   assert.match(fixture.transcript.local[0], /微信本地进度/);
+});
+
+test("BridgeProgressDelivery records progress hidden by route mode locally", async () => {
+  const fixture = progressFixture({ shouldDeliverProgress: () => false });
+
+  await fixture.progress.handleProgress({
+    routeKey: "route",
+    target: target(),
+    policy: DEFAULT_CHANNEL_DELIVERY_POLICY,
+    text: "silent 模式本地可见。",
+    kind: "reasoning",
+  });
+
+  assert.deepEqual(fixture.sentTexts, []);
+  assert.equal(fixture.transcript.local.length, 1);
+  assert.match(fixture.transcript.local[0], /silent 模式本地可见/);
 });
 
 function progressFixture(options: {

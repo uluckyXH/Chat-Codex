@@ -1,4 +1,5 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
+import { randomUUID } from "node:crypto";
 import type { CodexEvent, CodexProgressKind, CodexSessionStatus } from "../codex/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
@@ -26,6 +27,7 @@ export interface BridgeBackgroundTurnsOptions {
     routeKey: string,
     kind: CodexProgressKind | undefined,
   ): boolean;
+  shouldDeliverToolProgressWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
   progressDelivery?: BridgeProgressDelivery;
   notificationDelivery?: BridgeNotificationDelivery;
   pendingInput?: BridgePendingInputManager;
@@ -44,6 +46,7 @@ export class BridgeBackgroundTurns {
   private readonly routeTargets: Map<string, ChannelTarget>;
   private readonly deliveryPolicyFor: BridgeBackgroundTurnsOptions["deliveryPolicyFor"];
   private readonly progressDelivery: BridgeProgressDelivery;
+  private readonly shouldDeliverToolProgressWithPolicy: BridgeBackgroundTurnsOptions["shouldDeliverToolProgressWithPolicy"];
   private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly pendingInput?: BridgePendingInputManager;
   private readonly startRouteWorker: BridgeBackgroundTurnsOptions["startRouteWorker"];
@@ -65,6 +68,7 @@ export class BridgeBackgroundTurns {
       transcript: this.transcript,
       shouldDeliverProgress: options.shouldDeliverProgressWithPolicy,
     });
+    this.shouldDeliverToolProgressWithPolicy = options.shouldDeliverToolProgressWithPolicy;
     this.notificationDelivery = options.notificationDelivery ?? new BridgeNotificationDelivery({
       state: this.state,
       delivery: this.delivery,
@@ -95,7 +99,7 @@ export class BridgeBackgroundTurns {
         task: "Goal 自动续跑",
         startedAt: event.startedAt ?? new Date().toISOString(),
       });
-      await this.delivery.sendTyping(state.target, true);
+      this.startTypingKeepalive(state);
     } else if (event.type === "assistant.progress") {
       await this.progressDelivery.handleProgress({
         routeKey: state.routeKey,
@@ -104,6 +108,15 @@ export class BridgeBackgroundTurns {
         text: event.text,
         kind: event.kind,
       });
+    } else if (event.type === "tool.progress") {
+      if (this.shouldDeliverToolProgressWithPolicy(deliveryPolicy, state.routeKey)) {
+        await this.delivery.sendToolProgress(state.routeKey, state.target, {
+          phase: event.progress.phase,
+          toolName: event.progress.toolName,
+          toolCallId: event.progress.itemId,
+          status: event.progress.status,
+        });
+      }
     } else if (event.type === "codex.notification") {
       await this.notificationDelivery.deliver({
         routeKey: state.routeKey,
@@ -187,7 +200,7 @@ export class BridgeBackgroundTurns {
     const state: BackgroundTurnState = {
       routeKey,
       message,
-      target,
+      target: targetWithTurnRunId(target, event.turnId),
       finalText: "",
       finalPlanText: "",
     };
@@ -196,6 +209,7 @@ export class BridgeBackgroundTurns {
   }
 
   private async finishTurn(turnId: string, state: BackgroundTurnState, sendFinal = true): Promise<void> {
+    this.stopTypingKeepalive(state);
     await this.progressDelivery.flushRoute(state.routeKey);
     const composedFinalText = composeFinalAnswer(state.finalPlanText, state.finalText);
     if (sendFinal && composedFinalText) {
@@ -208,6 +222,30 @@ export class BridgeBackgroundTurns {
       this.startRouteWorker(state.routeKey);
     }
   }
+
+  private startTypingKeepalive(state: BackgroundTurnState): void {
+    if (state.typingTimer) return;
+    let stopped = false;
+    const tick = async () => {
+      await this.delivery.sendTyping(state.target, true);
+      if (stopped) return;
+      state.typingTimer = setTimeout(() => {
+        void tick();
+      }, 5000);
+      state.typingTimer.unref?.();
+    };
+    state.stopTyping = () => {
+      stopped = true;
+      if (state.typingTimer) clearTimeout(state.typingTimer);
+      state.typingTimer = undefined;
+      state.stopTyping = undefined;
+    };
+    void tick();
+  }
+
+  private stopTypingKeepalive(state: BackgroundTurnState): void {
+    state.stopTyping?.();
+  }
 }
 
 function currentStartedAt(status: CodexSessionStatus | undefined): string | undefined {
@@ -216,4 +254,19 @@ function currentStartedAt(status: CodexSessionStatus | undefined): string | unde
 
 function isTerminalLifecycleStatus(status: CodexSessionStatus | undefined): boolean {
   return status?.type === "unknown" && (status.detail === "thread archived" || status.detail === "thread closed");
+}
+
+function targetWithTurnRunId(target: ChannelTarget, turnId: string): ChannelTarget {
+  if (!turnId || !isWeixinChannelId(target.channelId)) return target;
+  return {
+    ...target,
+    context: {
+      ...target.context,
+      runId: randomUUID(),
+    },
+  };
+}
+
+function isWeixinChannelId(channelId: string): boolean {
+  return channelId === "weixin" || channelId.startsWith("weixin-");
 }

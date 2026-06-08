@@ -898,6 +898,13 @@ test("AppServerCodexAdapter aggregates command output deltas into one bounded su
   assert.match(commandProgress[1], /已省略/);
   assert.ok(commandProgress[1].length < 1200);
   assert.equal(events.some((event) => event.type === "assistant.progress" && event.text === "line 1\n"), false);
+  const toolProgress = events.filter((event) => event.type === "tool.progress");
+  assert.equal(toolProgress.length, 2);
+  assert.deepEqual(toolProgress.map((event) => event.type === "tool.progress" ? event.progress.phase : undefined), ["start", "end"]);
+  assert.deepEqual(toolProgress.map((event) => event.type === "tool.progress" ? event.progress.itemId : undefined), ["cmd-spam", "cmd-spam"]);
+  assert.ok(toolProgress.every((event) => event.type === "tool.progress" && event.progress.toolName.includes("npm test")));
+  const toolEnd = toolProgress.find((event) => event.type === "tool.progress" && event.progress.phase === "end");
+  assert.equal(toolEnd?.type === "tool.progress" ? toolEnd.progress.status : undefined, "completed");
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "command output done"));
 });
 
@@ -926,6 +933,9 @@ test("AppServerCodexAdapter keeps failure command tail in bounded summary", asyn
   assert.match(summary, /fatal line 80/);
   assert.match(summary, /已省略/);
   assert.ok(summary.length < 2000);
+  const toolEnd = events.find((event) => event.type === "tool.progress" && event.progress.phase === "end");
+  assert.equal(toolEnd?.type === "tool.progress" ? toolEnd.progress.itemId : undefined, "cmd-fail");
+  assert.equal(toolEnd?.type === "tool.progress" ? toolEnd.progress.status : undefined, "failed");
 });
 
 test("AppServerCodexAdapter reports interactive approval support", () => {

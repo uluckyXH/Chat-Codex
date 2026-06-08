@@ -273,6 +273,8 @@ export class AppServerTurnController {
   }
 
   private handleItemCompleted(turn: TurnQueueRecord, sessionId: string, turnId: string, item: Record<string, unknown>): void {
+    const toolProgress = toolProgressFromThreadItem(item, "end");
+    if (toolProgress) this.pushTurnEvent(turnId, { type: "tool.progress", sessionId, turnId, progress: toolProgress });
     const itemType = stringValue(item.type);
     const itemId = stringValue(item.id);
     if (itemId) this.flushProgressDraft(turn, sessionId, turnId, itemId);
@@ -338,6 +340,13 @@ export class AppServerTurnController {
   }
 
   private handleItemStarted(turn: TurnQueueRecord, _sessionId: string, _turnId: string, item: Record<string, unknown>): void {
+    const toolProgress = toolProgressFromThreadItem(item, "start");
+    if (toolProgress) this.pushTurnEvent(turn.turnId, {
+      type: "tool.progress",
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+      progress: toolProgress,
+    });
     const itemType = stringValue(item.type);
     if (itemType === "reasoning") {
       this.pushProgressEvent(turn, turn.sessionId, turn.turnId, "正在分析...", "reasoning");
@@ -426,6 +435,53 @@ function startedAtFromNotification(params: Record<string, unknown>): string | un
   return isoFromSeconds(numberValue(turn.startedAt))
     ?? isoFromMilliseconds(numberValue(turn.startedAtMs))
     ?? isoFromMilliseconds(numberValue(params.startedAtMs));
+}
+
+function toolProgressFromThreadItem(
+  item: Record<string, unknown>,
+  phase: "start" | "end",
+): { phase: "start" | "end"; itemId: string; toolName: string; status?: "completed" | "failed" | "blocked" | "unknown" } | undefined {
+  const itemId = stringValue(item.id);
+  if (!itemId) return undefined;
+  const toolName = toolNameFromThreadItem(item);
+  if (!toolName) return undefined;
+  return {
+    phase,
+    itemId,
+    toolName,
+    ...(phase === "end" ? { status: toolStatusFromThreadItem(item) } : {}),
+  };
+}
+
+function toolNameFromThreadItem(item: Record<string, unknown>): string | undefined {
+  const itemType = stringValue(item.type);
+  if (itemType === "commandExecution") {
+    const command = stringValue(item.command);
+    return command ? `command: ${truncateToolName(command)}` : "command";
+  }
+  if (itemType === "mcpToolCall") {
+    const tool = [stringValue(item.server), stringValue(item.tool)].filter(Boolean).join("/");
+    return tool ? truncateToolName(tool) : "mcp_tool";
+  }
+  if (itemType === "webSearch") return "web_search";
+  return undefined;
+}
+
+function toolStatusFromThreadItem(item: Record<string, unknown>): "completed" | "failed" | "blocked" | "unknown" {
+  const itemType = stringValue(item.type);
+  const status = stringValue(item.status)?.toLowerCase();
+  const exitCode = numberValue(item.exitCode);
+  if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") return "failed";
+  if (status === "blocked") return "blocked";
+  if (status === "completed" || status === "complete" || status === "success" || status === "succeeded") return "completed";
+  if (typeof exitCode === "number") return exitCode === 0 ? "completed" : "failed";
+  if (itemType === "webSearch" || itemType === "mcpToolCall") return "completed";
+  return "unknown";
+}
+
+function truncateToolName(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length <= 80 ? normalized : `${normalized.slice(0, 77)}...`;
 }
 
 function isoFromMilliseconds(milliseconds: number | undefined): string | undefined {

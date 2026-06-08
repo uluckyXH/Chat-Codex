@@ -290,14 +290,15 @@ export class BridgeStatusText {
         ],
       },
       {
-        command: "/progress [brief|detailed|silent]",
+        command: deliveryPolicy.toolProgress === "send" ? "/progress [brief|detailed|tools|silent]" : "/progress [brief|detailed|silent]",
         description: "查看或设置当前上下文进度投递模式。",
         hideWhenProgressDisabled: true,
         details: [
           "`brief`: 只发送计划、自言自语、搜索和文件变更摘要。",
-          "`detailed`: 发送所有可见进度，包括命令和工具调用细节。",
-          "`silent`: 不发送进度文本，只发送开始、审批和最终回复。",
-        ],
+          "`detailed`: 发送所有可见文本进度，并在渠道支持时发送结构化工具生命周期。",
+          deliveryPolicy.toolProgress === "send" ? "`tools`: 只发送结构化工具生命周期，不发送普通文本进度。" : undefined,
+          "`silent`: 不发送进度文本和结构化工具生命周期；仍发送审批、错误、安全通知、输入请求、命令回复和最终回复。",
+        ].filter((line): line is string => Boolean(line)),
       },
       { command: "/sendfile <任务内容>", description: "让 Codex 本轮按内部协议声明最终要发送的文件。" },
       {
@@ -325,16 +326,18 @@ export class BridgeStatusText {
     ].join("\n").trimEnd();
   }
 
-  progressModeText(routeKey: string): string {
+  progressModeText(routeKey: string, policy?: ChannelDeliveryPolicy): string {
     const mode = this.progressModeFor(routeKey);
+    const supportsToolProgress = policy?.toolProgress === "send";
     return [
       "**进度投递**",
       `- 当前模式: \`${mode}\``,
       "- `brief`: 只发送计划、自言自语、搜索和文件变更摘要，不发送命令/工具细节。",
-      "- `detailed`: 发送所有可见进度，包括命令和工具调用细节。",
-      "- `silent`: 不发送进度文本，只发送开始、审批和最终回复。",
+      "- `detailed`: 发送所有可见文本进度，包括命令和工具调用细节；渠道支持时同时发送结构化工具生命周期。",
+      supportsToolProgress ? "- `tools`: 只发送结构化工具生命周期，不发送普通文本进度。" : undefined,
+      "- `silent`: 不发送进度文本和结构化工具生命周期；仍发送审批、错误、安全通知、输入请求、命令回复和最终回复。",
       "- 文件不会由进度模式自动发送；需要本轮允许发文件时使用 `/sendfile <任务内容>`。",
-    ].join("\n");
+    ].filter((line): line is string => Boolean(line)).join("\n");
   }
 
   contextRefreshText(routeKey: string): string {
@@ -392,6 +395,7 @@ export class BridgeStatusText {
   shouldDeliverProgress(routeKey: string, kind: CodexProgressKind | undefined): boolean {
     const mode = this.progressModeFor(routeKey);
     if (mode === "silent") return false;
+    if (mode === "tools") return false;
     if (mode === "detailed") return true;
     return kind === "reasoning" || kind === "todo" || kind === "search" || kind === "file_change" || kind === "other";
   }
