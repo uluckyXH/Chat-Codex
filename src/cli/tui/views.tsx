@@ -12,6 +12,7 @@ import { channelDisplayName, formatFullDateTime, formatManagedChannelLabel, form
 import type { LauncherDashboard, PairingDashboardSummary, PairingRouteSummary, StartValidation } from "../actions/launcher-actions.js";
 import { formatChannelStatusDetails } from "../serve-wizard.js";
 import type { ContextRefreshTarget, PermissionTarget, Screen, SessionTarget } from "./types.js";
+import { defaultForFeishuStep } from "./navigation.js";
 import { sessionPage } from "./session-pagination.js";
 import {
   channelStatus,
@@ -665,10 +666,6 @@ function feishuStepLabel(step: Extract<Screen, { name: "addFeishu" }>["step"]): 
   if (step === "appId") return "FEISHU_APP_ID";
   if (step === "appSecret") return "FEISHU_APP_SECRET";
   return "账号标识";
-}
-
-function defaultForFeishuStep(step: Extract<Screen, { name: "addFeishu" }>["step"]): string {
-  return "";
 }
 
 function parseStartSummary(lines: string[]): Array<{ title: string; items: string[] }> {

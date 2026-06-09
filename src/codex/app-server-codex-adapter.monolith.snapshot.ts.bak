@@ -1164,9 +1164,10 @@ function collaborationModePayload(
   if (!model) {
     throw new Error("无法切换 Codex 协作模式：缺少当前模型信息。");
   }
-  const reasoningEffort = mode === "plan"
-    ? "medium"
-    : policy.reasoningEffort ?? stored.status.model?.reasoningEffort ?? stored.baseModel?.reasoningEffort ?? null;
+  const reasoningEffort = policy.reasoningEffort
+    ?? stored.status.model?.reasoningEffort
+    ?? stored.baseModel?.reasoningEffort
+    ?? null;
   return {
     mode,
     settings: {

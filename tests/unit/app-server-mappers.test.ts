@@ -314,7 +314,19 @@ test("app-server session status helpers preserve status context and collaboratio
     mode: "plan",
     settings: {
       model: "fake",
-      reasoning_effort: "medium",
+      reasoning_effort: "high",
+      developer_instructions: null,
+    },
+  });
+  assert.deepEqual(collaborationModePayload("plan", {}, {
+    session: { id: "session-1", cwd: "/repo", createdAt: "now" },
+    status: { type: "idle" as const, model: { model: "fake" } },
+    updatedAt: "now",
+  }), {
+    mode: "plan",
+    settings: {
+      model: "fake",
+      reasoning_effort: null,
       developer_instructions: null,
     },
   });

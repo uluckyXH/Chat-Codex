@@ -231,6 +231,7 @@ rl.on("line", (line) => {
     if (prompt.includes("collaboration mode params")) {
       const collab = message.params.collaborationMode || {};
       const settings = collab.settings || {};
+      send({ method: "thread/settings/updated", params: { threadId, threadSettings: { cwd: message.params.cwd, model: settings.model, modelProvider: "openai", serviceTier: null, effort: settings.reasoning_effort, collaborationMode: collab } } });
       send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "mode " + collab.mode + " model " + settings.model + " effort " + settings.reasoning_effort + " dev " + settings.developer_instructions, phase: null, memoryCitation: null } } });
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
       return;
@@ -1041,16 +1042,20 @@ test("AppServerCodexAdapter sends collaboration mode on turn start", async () =>
     cwd: root,
     title: "test",
   });
+  adapter.setModelPolicy({ model: "fake-next", reasoningEffort: "xhigh" }, session.id);
   adapter.setCollaborationMode("plan", session.id);
   const events = [];
 
   for await (const event of adapter.run(session.id, "collaboration mode params please")) {
     events.push(event);
   }
+  const status = await adapter.getStatus(session.id);
   await adapter.stop();
 
   assert.equal(adapter.getCollaborationMode(session.id), "plan");
-  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "mode plan model fake effort medium dev null"));
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "mode plan model fake-next effort xhigh dev null"));
+  assert.equal(status.model?.model, "fake-next");
+  assert.equal(status.model?.reasoningEffort, "xhigh");
 });
 
 test("AppServerCodexAdapter emits completed plan items as final plan events in plan mode", async () => {
