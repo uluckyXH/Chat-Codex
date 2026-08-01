@@ -7,7 +7,7 @@ import type { ChannelMessage, ChannelTarget } from "../protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../protocol/delivery-policy.js";
 import type { MemoryStateStore } from "../state/memory-state-store.js";
 import type { BackgroundTurnState } from "./bridge-types.js";
-import { composeFinalAnswer } from "./formatters.js";
+import { composeFinalAnswer, desktopPromptMirrorText } from "./formatters.js";
 import type { BridgeDelivery } from "./delivery.js";
 import { contextCompactionNotice } from "./context-compaction.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
@@ -115,6 +115,17 @@ export class BridgeBackgroundTurns {
         startedAt: event.startedAt ?? new Date().toISOString(),
       });
       this.startTypingKeepalive(state);
+    } else if (event.type === "user.input") {
+      try {
+        await this.delivery.sendText(state.target, desktopPromptMirrorText(event.text));
+      } catch (error) {
+        this.logger.warn("desktop prompt mirror delivery failed", {
+          routeKey: state.routeKey,
+          sessionId: event.sessionId,
+          turnId: event.turnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } else if (event.type === "context.compaction") {
       if (this.shouldDeliverContextCompaction(state.routeKey, event.sessionId)) {
         await this.delivery.sendText(state.target, contextCompactionNotice(event));

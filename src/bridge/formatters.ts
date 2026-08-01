@@ -28,6 +28,14 @@ export function truncateForChannel(text: string, maxLength = 600): string {
   return `${normalized.slice(0, maxLength)}...`;
 }
 
+export function desktopPromptMirrorText(text: string): string {
+  const normalized = text.trim();
+  const visible = normalized.length > 3000
+    ? `${normalized.slice(0, 3000)}\n…（电脑端提示词过长，手机镜像已截断）`
+    : normalized;
+  return `【电脑端提示词】\n${visible}`;
+}
+
 export function isSteerableStatus(status: CodexSessionStatus["type"]): boolean {
   return status === "running" || status === "waiting_approval" || status === "waiting_input";
 }

@@ -390,11 +390,51 @@ export class Bridge {
   }
 
   async start(): Promise<void> {
+    await this.restorePersistedRoutes();
     this.stopBackgroundEvents = this.codex.onBackgroundEvent?.((event) => this.backgroundTurns.handle(event));
     this.channels.onMessage((message) => this.handleMessage(message));
     this.channels.onApprovalAction((action) => this.handleChannelApprovalAction(action));
     await this.channels.start();
     this.logger.info("bridge started", { channels: this.channels.ids().join(",") });
+  }
+
+  private async restorePersistedRoutes(): Promise<void> {
+    const resumed = new Set<string>();
+    for (const route of this.state.listRoutes()) {
+      if (!route.routeKey || !route.channelId || !route.conversationId) continue;
+      if (!this.state.isRouteTrusted(route.routeKey)) continue;
+      const senderId = route.identity?.lastSenderId ?? route.conversationId;
+      const message: ChannelMessage = {
+        id: `restored-route:${route.routeKey}`,
+        channelId: route.channelId,
+        accountId: route.accountId,
+        routeKey: route.routeKey,
+        conversation: {
+          kind: route.conversationKind,
+          id: route.conversationId,
+          displayName: route.displayName,
+        },
+        sender: { id: senderId },
+        timestamp: route.lastSeenAt ?? new Date().toISOString(),
+        text: "",
+      };
+      this.routeMessages.set(route.routeKey, message);
+      this.routeTargets.set(route.routeKey, replyTargetFromMessage(message));
+      const sessionId = route.activeSessionId;
+      const owner = sessionId ? this.state.getSessionOwner(sessionId) : undefined;
+      if (!sessionId || owner?.ownerRouteKey !== route.routeKey || resumed.has(sessionId)) continue;
+      try {
+        await this.codex.resumeSession(sessionId);
+        this.applyStoredSessionRunPolicy(sessionId);
+        resumed.add(sessionId);
+      } catch (error) {
+        this.logger.warn("persisted Codex session resume failed", {
+          sessionId,
+          routeKey: route.routeKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   async stop(): Promise<void> {
