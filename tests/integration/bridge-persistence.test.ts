@@ -6,10 +6,30 @@ import path from "node:path";
 import { Bridge } from "../../src/bridge/bridge.js";
 import { MockChannelAdapter } from "../../src/channels/mock/mock-channel-adapter.js";
 import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
+import type { CodexBackgroundEventHandler, CodexEvent } from "../../src/codex/types.js";
 import { SilentLogger } from "../../src/logging/logger.js";
 import type { TranscriptSink } from "../../src/logging/transcript.js";
 import type { ChannelMessage } from "../../src/protocol/channel.js";
 import { FileStateStore } from "../../src/state/file-state-store.js";
+
+class BackgroundMockCodexAdapter extends MockCodexAdapter {
+  readonly resumedSessions: string[] = [];
+  private readonly backgroundHandlers = new Set<CodexBackgroundEventHandler>();
+
+  override async resumeSession(sessionId: string) {
+    this.resumedSessions.push(sessionId);
+    return await super.resumeSession(sessionId);
+  }
+
+  onBackgroundEvent(handler: CodexBackgroundEventHandler): () => void {
+    this.backgroundHandlers.add(handler);
+    return () => this.backgroundHandlers.delete(handler);
+  }
+
+  async emitBackground(event: CodexEvent): Promise<void> {
+    for (const handler of this.backgroundHandlers) await handler(event);
+  }
+}
 
 test("Bridge restores route session binding from FileStateStore after restart", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-persist-"));
@@ -49,6 +69,63 @@ test("Bridge restores route session binding from FileStateStore after restart", 
   assert.equal(codex.runs[1].sessionId, sessionId);
   assert.equal(fs.existsSync(path.join(rootDir, "routes.json")), true);
   assert.equal(fs.existsSync(path.join(rootDir, "session-owners.json")), true);
+});
+
+test("Bridge restores trusted route targets before delivering Desktop prompt mirrors", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-desktop-mirror-"));
+  const routeKey = "weixin-main:wx-account:direct:wx-user";
+  const codex = new BackgroundMockCodexAdapter();
+  const session = await codex.startSession({ routeKey, cwd: "/tmp/work", title: "desktop mirror" });
+  const state = new FileStateStore({ rootDir });
+  const message: ChannelMessage = {
+    id: "wx-message-1",
+    routeKey,
+    channelId: "weixin-main",
+    accountId: "wx-account",
+    sender: { id: "wx-user" },
+    conversation: { id: "wx-user", kind: "direct", displayName: "微信私聊" },
+    text: "你好",
+    timestamp: "2026-08-01T00:00:00.000Z",
+  };
+  state.recordRouteMessage(message);
+  state.trustRoute({
+    routeKey,
+    channelId: "weixin-main",
+    accountId: "wx-account",
+    conversationKind: "direct",
+    conversationId: "wx-user",
+    trustedAt: "2026-08-01T00:00:00.000Z",
+    trustedBySenderId: "wx-user",
+    trustMethod: "manual",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+  });
+  state.bindSession(routeKey, session);
+
+  const channel = new MockChannelAdapter({ id: "weixin-main", accountId: "wx-account" });
+  const bridge = new Bridge({
+    channel,
+    codex,
+    state: new FileStateStore({ rootDir }),
+    logger: new SilentLogger(),
+    cwd: "/tmp/work",
+  });
+  await bridge.start();
+  try {
+    await codex.emitBackground({
+      type: "user.input",
+      sessionId: session.id,
+      turnId: "desktop-turn-1",
+      itemId: "desktop-item-1",
+      clientId: "7cb06f4c-7d2d-4f1a-a9f5-ef9cf2754898",
+      text: "电脑端复测",
+    });
+    assert.deepEqual(codex.resumedSessions, [session.id]);
+    assert.equal(channel.sentMessages.at(-1)?.target.routeKey, routeKey);
+    assert.equal(channel.sentMessages.at(-1)?.text, "【电脑端提示词】\n电脑端复测");
+  } finally {
+    await bridge.stop();
+  }
 });
 
 test("Bridge applies persisted session run policy when restoring a binding", async () => {

@@ -31,6 +31,7 @@ export class AppServerTurnController {
   private readonly earlyTurnEvents = new Map<string, CodexEvent[]>();
   private readonly closedTurnIds = new Set<string>();
   private readonly backgroundHandlers = new Set<CodexBackgroundEventHandler>();
+  private readonly mirroredDesktopUserItems = new Set<string>();
 
   constructor(options: AppServerTurnControllerOptions) {
     this.sessions = options.sessions;
@@ -282,6 +283,28 @@ export class AppServerTurnController {
     const itemType = stringValue(item.type);
     const itemId = stringValue(item.id);
     if (itemId) this.flushProgressDraft(turn, sessionId, turnId, itemId);
+    if (itemType === "userMessage") {
+      if (process.env.CHAT_CODEX_MIRROR_DESKTOP_PROMPTS !== "1") return;
+      const clientId = stringValue(item.clientId);
+      const text = textFromDesktopUserMessage(item);
+      if (!isDesktopClientId(clientId) || !text) return;
+      const mirrorKey = `${sessionId}:${itemId ?? clientId}`;
+      if (this.mirroredDesktopUserItems.has(mirrorKey)) return;
+      this.mirroredDesktopUserItems.add(mirrorKey);
+      if (this.mirroredDesktopUserItems.size > 512) {
+        const oldest = this.mirroredDesktopUserItems.values().next().value;
+        if (oldest) this.mirroredDesktopUserItems.delete(oldest);
+      }
+      turn.queue.push({
+        type: "user.input",
+        sessionId,
+        turnId,
+        clientId,
+        text,
+        ...(itemId ? { itemId } : {}),
+      });
+      return;
+    }
     if (itemType === "contextCompaction" || itemType === "context_compaction") {
       this.pushTurnEvent(turnId, { type: "context.compaction", sessionId, turnId, phase: "completed" });
       return;
@@ -498,6 +521,21 @@ export class AppServerTurnController {
       },
     });
   }
+}
+
+function textFromDesktopUserMessage(item: Record<string, unknown>): string {
+  return arrayValue(item.content)
+    .map((entry) => {
+      const part = objectValue(entry);
+      return stringValue(part.type) === "text" ? stringValue(part.text) : undefined;
+    })
+    .filter((entry): entry is string => Boolean(entry))
+    .join("\n")
+    .trim();
+}
+
+function isDesktopClientId(clientId: string | undefined): clientId is string {
+  return Boolean(clientId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId));
 }
 
 function startedAtFromNotification(params: Record<string, unknown>): string | undefined {
