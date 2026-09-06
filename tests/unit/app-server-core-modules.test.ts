@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WebSocketServer } from "ws";
 import type { CodexEvent } from "../../src/codex/types.js";
 import { AppServerRpcClient } from "../../src/codex/app-server/rpc-client.js";
 import { AppServerSessionStore } from "../../src/codex/app-server/session-store.js";
@@ -87,6 +89,69 @@ test("app-server turn controller maps notifications to queued events and status 
   assert.deepEqual(await iterator.next(), { value: undefined, done: true });
   assert.equal(sessions.get("session-1")?.status.type, "idle");
   assert.equal(controller.hasActiveTurns(), false);
+});
+
+test("app-server turn controller mirrors Desktop user messages once and ignores bridge-origin inputs", async () => {
+  const previous = process.env.CHAT_CODEX_MIRROR_DESKTOP_PROMPTS;
+  process.env.CHAT_CODEX_MIRROR_DESKTOP_PROMPTS = "1";
+  try {
+    const sessions = new Map();
+    sessions.set("session-1", {
+      session: { id: "session-1", cwd: "/repo", createdAt: "now" },
+      status: { type: "idle" },
+      updatedAt: "now",
+    });
+    const controller = new AppServerTurnController({ sessions, threadToSession: new Map([["thread-1", "session-1"]]) });
+    const queue = new AsyncEventQueue<CodexEvent>();
+    const iterator = queue[Symbol.asyncIterator]();
+    controller.registerTurn("session-1", "turn-1", queue);
+    const desktopItem = {
+      type: "userMessage",
+      id: "desktop-item-1",
+      clientId: "7cb06f4c-7d2d-4f1a-a9f5-ef9cf2754898",
+      content: [{ type: "text", text: "电脑端提示词" }],
+    };
+
+    controller.handleNotification({
+      method: "item/completed",
+      params: { threadId: "thread-1", turnId: "turn-1", item: desktopItem },
+    });
+    assert.deepEqual(await iterator.next(), {
+      value: {
+        type: "user.input",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        itemId: "desktop-item-1",
+        clientId: "7cb06f4c-7d2d-4f1a-a9f5-ef9cf2754898",
+        text: "电脑端提示词",
+      },
+      done: false,
+    });
+
+    controller.handleNotification({
+      method: "item/completed",
+      params: { threadId: "thread-1", turnId: "turn-1", item: desktopItem },
+    });
+    controller.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { ...desktopItem, id: "weixin-item-1", clientId: null },
+      },
+    });
+    controller.handleNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turnId: "turn-1", turn: { status: "completed" } },
+    });
+    assert.deepEqual(await iterator.next(), {
+      value: { type: "turn.completed", sessionId: "session-1", turnId: "turn-1" },
+      done: false,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.CHAT_CODEX_MIRROR_DESKTOP_PROMPTS;
+    else process.env.CHAT_CODEX_MIRROR_DESKTOP_PROMPTS = previous;
+  }
 });
 
 test("app-server turn controller emits notifications even after the turn is closed", async () => {
@@ -215,6 +280,44 @@ for await (const line of rl) {
     assert.deepEqual(await client.request("model/list"), { data: [{ id: "fake" }], nextCursor: null });
   } finally {
     client.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("app-server rpc client connects to a shared app-server over a Unix socket", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "chat-codex-unix-rpc-"));
+  const socketPath = join(dir, "app-server.sock");
+  const server = createServer();
+  const webSockets = new WebSocketServer({ server });
+  webSockets.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        socket.send(JSON.stringify({ id: message.id, result: { ok: true } }));
+      } else if (message.method === "model/list") {
+        socket.send(JSON.stringify({ id: message.id, result: { data: [{ id: "shared" }], nextCursor: null } }));
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+  const client = new AppServerRpcClient({
+    codexBin: process.execPath,
+    requestTimeoutMs: 1000,
+    appServerEndpoint: `unix://${socketPath}`,
+    onServerRequest: () => undefined,
+    onNotification: () => undefined,
+    onFatalError: () => undefined,
+  });
+  try {
+    await client.start();
+    assert.deepEqual(await client.request("model/list"), { data: [{ id: "shared" }], nextCursor: null });
+  } finally {
+    client.stop();
+    await new Promise<void>((resolve) => webSockets.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   }
 });

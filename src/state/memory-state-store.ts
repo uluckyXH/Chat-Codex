@@ -98,6 +98,10 @@ export class MemoryStateStore {
     return undefined;
   }
 
+  listRoutes(): RouteRecord[] {
+    return [];
+  }
+
   isRouteTrusted(routeKey: string): boolean {
     return this.trustedRoutes.has(routeKey);
   }

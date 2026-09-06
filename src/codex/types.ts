@@ -183,6 +183,7 @@ export type CodexEvent =
   | { type: "context.compaction"; sessionId: string; turnId: string; phase: "started" | "completed" }
   | { type: "assistant.progress"; sessionId: string; turnId: string; text: string; kind?: CodexProgressKind }
   | { type: "assistant.commentary"; sessionId: string; turnId: string; text: string; itemId?: string }
+  | { type: "user.input"; sessionId: string; turnId: string; text: string; itemId?: string; clientId: string }
   | { type: "tool.progress"; sessionId: string; turnId: string; progress: CodexToolProgress }
   | { type: "codex.notification"; sessionId: string; turnId: string; notification: CodexNotification }
   | { type: "assistant.plan"; sessionId: string; turnId: string; text: string }

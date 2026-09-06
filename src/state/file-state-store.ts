@@ -339,7 +339,7 @@ export class FileStateStore extends MemoryStateStore {
       .sort((left, right) => left.routeKey.localeCompare(right.routeKey));
   }
 
-  listRoutes(): RouteRecord[] {
+  override listRoutes(): RouteRecord[] {
     return [...this.routes.values()].sort((left, right) => left.routeKey.localeCompare(right.routeKey));
   }
 

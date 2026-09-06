@@ -105,6 +105,19 @@ Chat-Codex enables pairing protection for real Weixin and Feishu chats by defaul
 
 After pairing succeeds, that chat is stored as a trusted route and remains usable after restarts. Pairing is scoped per chat route: different Weixin contacts and different Feishu private `chat_id` values each need to be paired once.
 
+### Shared Codex App Server
+
+By default, Chat-Codex starts its own stdio Codex app-server. Advanced setups can connect to an existing app-server over a Unix socket:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CHAT_CODEX_APP_SERVER_ENDPOINT` | unset | Shared endpoint, currently `unix:///absolute/path.sock`. |
+| `CHAT_CODEX_APP_SERVER_DAEMON` | unset | Set to `1` to use the shared Unix socket mode. |
+| `CHAT_CODEX_APP_SERVER_SOCKET` | `~/.codex/app-server-control/app-server-control.sock` | Socket path used in daemon mode. |
+| `CHAT_CODEX_MIRROR_DESKTOP_PROMPTS` | unset | Set to `1` to mirror Desktop user prompts to the chat route that owns the Codex session. |
+
+The shared connection reconnects with backoff and restores trusted routes, session ownership, and active sessions after restart. Desktop prompt mirroring is opt-in and route-scoped; messages originating from Chat-Codex are not mirrored back.
+
 ## Tech Stack
 
 | Area | Technology |

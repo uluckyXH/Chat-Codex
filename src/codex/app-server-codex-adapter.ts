@@ -71,6 +71,7 @@ export interface AppServerCodexAdapterOptions {
   requestTimeoutMs?: number;
   interruptTimeoutMs?: number;
   compactTimeoutMs?: number;
+  appServerEndpoint?: string;
 }
 
 interface CompactWaiter {
@@ -118,6 +119,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       onServerRequest: (request) => this.handleServerRequest(request),
       onNotification: (notification) => this.handleNotification(notification),
       onFatalError: (error) => this.handleFatalAppServerError(error),
+      appServerEndpoint: options.appServerEndpoint,
     });
   }
 
@@ -148,6 +150,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       approvalsReviewer: approvalsReviewerForRunPolicy(this.defaultRunPolicy),
       sandbox: sandboxModeForRunPolicy(this.defaultRunPolicy),
       serviceName: "codex-chat-bridge",
+      threadSource: "user",
       sessionStartSource: "startup",
     });
     const thread = objectValue(response.thread);

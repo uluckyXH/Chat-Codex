@@ -123,8 +123,14 @@ Chat-Codex 对真实微信/飞书聊天默认启用配对保护。第一次从�
 | `CHAT_CODEX_BIN` | 未设置 | 覆盖 Codex CLI 可执行文件路径；主要用于 Windows Codex CLI 路径排障。 |
 | `CHAT_CODEX_STATE_DIR` | 未设置 | 覆盖状态根目录；相对路径按启动 `chat-codex` 时的工作目录解析。 |
 | `CHAT_CODEX_UPLOAD_DIR` | 未设置 | 覆盖上传目录；相对路径按启动 `chat-codex` 时的工作目录解析。 |
+| `CHAT_CODEX_APP_SERVER_ENDPOINT` | 未设置 | 连接已有 Codex app-server；目前支持 `unix:///absolute/path.sock`。未设置时仍由 Chat-Codex 启动独立的 stdio app-server。 |
+| `CHAT_CODEX_APP_SERVER_DAEMON` | 未设置 | 设为 `1` 时连接共享 Unix socket；可配合 `CHAT_CODEX_APP_SERVER_SOCKET` 指定路径。 |
+| `CHAT_CODEX_APP_SERVER_SOCKET` | `~/.codex/app-server-control/app-server-control.sock` | 共享 app-server 的 Unix socket 路径，仅在 daemon 模式下使用。 |
+| `CHAT_CODEX_MIRROR_DESKTOP_PROMPTS` | 未设置 | 设为 `1` 时，将同一 Codex session 中来自 Desktop 的用户消息镜像到其所属聊天 route。 |
 
 旧版本曾默认写入启动目录下的 `state/` 和 `.chat-codex-uploads/`。升级后如果需要读取旧数据，可以把旧 `state/` 移到 `~/.chat-codex/state/`，或临时设置 `CHAT_CODEX_STATE_DIR=/old/start/dir/state`。
+
+共享 app-server 属于高级配置。它会在断线后自动退避重连，并在重启后恢复可信 route、session owner 和活动 session。Desktop 消息镜像默认关闭，且只投递给该 session 已绑定的 route；Chat-Codex 自己发送的消息不会被再次镜像。
 
 ## 技术栈
 

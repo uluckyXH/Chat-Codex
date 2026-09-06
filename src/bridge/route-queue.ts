@@ -23,6 +23,7 @@ import type { BridgeSessionFlow } from "./session-flow.js";
 import { StaleCodexSessionBindingError, type StaleCodexSessionBindingInfo } from "./session-flow.js";
 import {
   composeFinalAnswer,
+  desktopPromptMirrorText,
   truncateForChannel,
   withSendFileInstruction,
 } from "./formatters.js";
@@ -286,6 +287,17 @@ export class BridgeRouteQueue {
                 task: truncateForChannel(promptText || codexInputPlainText(prompt), 120),
                 startedAt: currentTurnStartedAt,
               });
+            } else if (event.type === "user.input") {
+              try {
+                await this.delivery.sendText(target, desktopPromptMirrorText(event.text));
+              } catch (error) {
+                this.logger.warn("desktop prompt mirror delivery failed", {
+                  routeKey: message.routeKey,
+                  sessionId: event.sessionId,
+                  turnId: event.turnId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
             } else if (event.type === "context.compaction") {
               await this.delivery.sendText(target, contextCompactionNotice(event));
             } else if (event.type === "assistant.progress") {
