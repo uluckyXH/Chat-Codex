@@ -302,7 +302,10 @@ export class AppServerTurnController {
     }
     if (itemType === "reasoning") {
       if (itemId && turn.emittedProgressItemIds.has(itemId)) return;
-      const text = [...arrayValue(item.summary), ...arrayValue(item.content)]
+      // 只取 summary：content 是模型未经摘要的原始思维链。当模型的
+      // default_reasoning_summary 为 none 时（多数第三方网关模型如此），codex 会把整段
+      // CoT 放进 content，原样投递到聊天渠道会造成刷屏，且思维链本就不该直接示人。
+      const text = [...arrayValue(item.summary)]
         .map((entry) => typeof entry === "string" ? entry : undefined)
         .filter((entry): entry is string => Boolean(entry))
         .join("\n")

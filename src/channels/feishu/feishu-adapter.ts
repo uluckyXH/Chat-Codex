@@ -68,7 +68,9 @@ const FEISHU_TYPING_EMOJI_TYPE = "Typing";
 const FEISHU_DELIVERY_POLICY: ChannelDeliveryPolicy = {
   ...DEFAULT_CHANNEL_DELIVERY_POLICY,
   realtimeProgress: "send",
-  allowedProgressModes: ["realtime", "silent", "brief"],
+  // actions 档需要工具进度，飞书原本继承默认的 suppress，这里放开。
+  toolProgress: "send",
+  allowedProgressModes: ["realtime", "silent", "brief", "actions"],
   defaultProgressMode: "brief",
 };
 const SILENT_FEISHU_SDK_LOGGER = {

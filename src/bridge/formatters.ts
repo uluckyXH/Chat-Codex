@@ -519,6 +519,7 @@ export function formatCollaborationModeForStatus(mode: CodexCollaborationMode): 
 export function formatProgressModeForStatus(mode: ProgressDeliveryMode): string {
   switch (mode) {
     case "brief": return "摘要模式";
+    case "actions": return "动作模式";
     case "detailed": return "详细模式";
     case "realtime": return "实时模式";
     case "tools": return "工具模式";
@@ -530,6 +531,7 @@ export function formatProgressLabelForStatus(label: string): string {
   switch (label) {
     case "disabled": return "已禁用";
     case "brief": return "摘要模式";
+    case "actions": return "动作模式";
     case "detailed": return "详细模式";
     case "realtime": return "实时模式";
     case "tools": return "工具模式";
@@ -659,6 +661,7 @@ export function sleep(ms: number): Promise<void> {
 export function parseProgressDeliveryMode(value: string): ProgressDeliveryMode | undefined {
   const normalized = value.trim().toLowerCase();
   if (normalized === "brief" || normalized === "normal") return "brief";
+  if (normalized === "actions" || normalized === "action" || normalized === "work") return "actions";
   if (normalized === "detailed" || normalized === "verbose" || normalized === "debug") return "detailed";
   if (normalized === "realtime" || normalized === "real-time" || normalized === "real_time" || normalized === "all") return "realtime";
   if (normalized === "tools" || normalized === "tool") return "tools";

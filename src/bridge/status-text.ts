@@ -436,6 +436,7 @@ export class BridgeStatusText {
     const mode = this.progressModeFor(routeKey);
     if (mode === "silent") return false;
     if (mode === "tools") return false;
+    if (mode === "actions") return false;
     if (mode === "realtime") return true;
     if (mode === "detailed") return true;
     return kind === "reasoning" || kind === "todo" || kind === "search" || kind === "file_change" || kind === "other";

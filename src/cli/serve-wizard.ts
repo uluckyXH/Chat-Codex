@@ -363,6 +363,7 @@ export function formatPermissionModeForUser(permissionMode: CodexPermissionMode)
 
 export function formatProgressModeForUser(progressMode: ProgressDeliveryMode | undefined, disabled = false): string {
   if (disabled) return "微信渠道不投递阶段进度（本地终端仍记录）";
+  if (progressMode === "actions") return "动作（旁白与工具）";
   if (progressMode === "detailed") return "详细";
   if (progressMode === "realtime") return "实时";
   if (progressMode === "tools") return "结构化工具";

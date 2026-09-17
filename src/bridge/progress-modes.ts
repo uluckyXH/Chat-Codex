@@ -10,6 +10,7 @@ export function isProgressModeAllowedByPolicy(
   if (!configuredProgressModes(policy).includes(mode)) return false;
   if (mode === "silent") return true;
   if (mode === "tools") return policy.toolProgress === "send";
+  if (mode === "actions") return policy.progress !== "suppress";
   if (mode === "realtime") return policy.progress !== "suppress" && policy.realtimeProgress !== "suppress";
   if (mode === "detailed") return policy.progress !== "suppress";
   if (mode === "brief") return policy.progress !== "suppress";
@@ -36,5 +37,5 @@ function configuredProgressModes(policy: ChannelDeliveryPolicy): ProgressDeliver
 }
 
 function isKnownProgressMode(value: string): value is ProgressDeliveryMode {
-  return value === "brief" || value === "detailed" || value === "realtime" || value === "tools" || value === "silent";
+  return value === "brief" || value === "actions" || value === "detailed" || value === "realtime" || value === "tools" || value === "silent";
 }
