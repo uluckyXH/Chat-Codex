@@ -3,7 +3,7 @@ export type ChannelProgressDelivery = "send" | "suppress" | "aggregate";
 export type ChannelProgressCommandMode = "enabled" | "disabled";
 export type ChannelToolProgressDelivery = "send" | "suppress";
 export type ChannelRealtimeProgressDelivery = "send" | "suppress";
-export type ChannelDefaultProgressMode = "brief" | "detailed" | "realtime" | "tools" | "silent";
+export type ChannelDefaultProgressMode = "brief" | "actions" | "detailed" | "realtime" | "tools" | "silent";
 
 export interface ChannelRefreshCommandPolicy {
   command: string;

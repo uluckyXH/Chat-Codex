@@ -700,6 +700,7 @@ export class Bridge {
     if (mode === "silent") return false;
     if (mode === "realtime") return policy.realtimeProgress !== "suppress";
     if (mode === "tools") return false;
+    if (mode === "actions") return false;
     return this.statusTextRenderer.shouldDeliverProgress(routeKey, kind);
   }
 
@@ -716,7 +717,7 @@ export class Bridge {
     if (mode === "silent") return false;
     if (mode === "realtime") return policy.realtimeProgress !== "suppress";
     if (mode === "tools") return false;
-    return mode === "brief" || mode === "detailed";
+    return mode === "brief" || mode === "actions" || mode === "detailed";
   }
 
   private isRealtimeCommentaryWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean {
@@ -729,7 +730,7 @@ export class Bridge {
     if (policy.toolProgress !== "send") return false;
     const mode = this.progressModeFor(routeKey);
     if (mode === "silent") return false;
-    return mode === "tools" || mode === "detailed" || (mode === "realtime" && policy.realtimeProgress !== "suppress");
+    return mode === "tools" || mode === "actions" || mode === "detailed" || (mode === "realtime" && policy.realtimeProgress !== "suppress");
   }
 
   private runPolicyStatus(sessionId?: string): CodexRunPolicyStatus | undefined {

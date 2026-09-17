@@ -157,7 +157,7 @@ export type InitialRouteBinding =
   | { type: "existing"; sessionId: string }
   | { type: "new" };
 
-export type ProgressDeliveryMode = "brief" | "detailed" | "realtime" | "tools" | "silent";
+export type ProgressDeliveryMode = "brief" | "actions" | "detailed" | "realtime" | "tools" | "silent";
 export type RouteTrustMode = "disabled" | "pairing_required" | "real_channels";
 export type UnboundRoutePolicy = "auto_new" | "ask";
 

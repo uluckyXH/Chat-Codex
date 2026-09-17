@@ -108,7 +108,7 @@ test("Feishu private chat uses Bridge commands and default progress delivery", a
 
   const texts = factory.client.sentTexts();
   assert.ok(texts.some((text) => text.includes("**可用命令**") && text.includes("/status")));
-  assert.ok(texts.some((text) => text.includes("`/progress [realtime|silent|brief]`")));
+  assert.ok(texts.some((text) => text.includes("`/progress [realtime|silent|brief|actions]`")));
   assert.equal(texts.some((text) => text.includes("`detailed`")), false);
   assert.equal(texts.some((text) => text.includes("`tools`")), false);
   assert.equal(texts.some((text) => text.includes("/group on|off")), false);
@@ -141,7 +141,7 @@ test("Feishu private chat rejects detailed progress mode", async () => {
   await bridge.stop();
 
   const texts = factory.client.sentTexts();
-  assert.ok(texts.some((text) => text.includes("可用值: realtime, silent, brief")));
+  assert.ok(texts.some((text) => text.includes("可用值: realtime, silent, brief, actions")));
   assert.equal(texts.some((text) => text.includes("当前模式: `detailed`")), false);
 });
 

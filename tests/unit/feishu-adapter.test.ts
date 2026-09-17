@@ -36,8 +36,9 @@ test("FeishuAdapter starts websocket and declares private media capabilities", a
 
   assert.equal((await adapter.getStatus()).state, "connected");
   assert.equal(factory.wsClient?.starts, 1);
-  assert.deepEqual(adapter.getDeliveryPolicy().allowedProgressModes, ["realtime", "silent", "brief"]);
+  assert.deepEqual(adapter.getDeliveryPolicy().allowedProgressModes, ["realtime", "silent", "brief", "actions"]);
   assert.equal(adapter.getDeliveryPolicy().realtimeProgress, "send");
+  assert.equal(adapter.getDeliveryPolicy().toolProgress, "send");
   assert.equal(adapter.getDeliveryPolicy().defaultProgressMode, "brief");
   assert.deepEqual(adapter.getCapabilities(), {
     text: true,
