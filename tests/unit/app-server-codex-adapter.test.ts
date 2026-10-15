@@ -379,12 +379,12 @@ rl.on("line", (line) => {
       return;
     }
     if (prompt.includes("commentary chunks")) {
-      const first = "这是一段很长的 commentary 更新，用来模拟 Codex 工作进度被分片发送到微信时的第一段内容，长度足够触发提前刷新并进入进度流";
-      const second = "，然后继续补上第二段。";
+      const first = "我先检查第一段内容。版本 0.162.1。";
+      const second = "然后继续补上第二段。";
       send({ method: "item/started", params: { threadId, turnId, startedAtMs: Date.now(), item: { type: "agentMessage", id: "commentary-chunks-1", text: "", phase: "commentary", memoryCitation: null } } });
       send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "commentary-chunks-1", delta: first } });
       send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "commentary-chunks-1", delta: second } });
-      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "commentary-chunks-1", text: first + second, phase: "commentary", memoryCitation: null } } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "commentary-chunks-1", text: first + second + "完成时补齐的结论。", phase: "commentary", memoryCitation: null } } });
       send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "commentary chunks final", phase: "final_answer", memoryCitation: null } } });
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
       return;
@@ -1140,6 +1140,7 @@ test("AppServerCodexAdapter does not duplicate chunked commentary on completion"
   assert.equal(commentaryTexts.length, 1);
   assert.ok(commentaryTexts[0].includes("第一段内容"));
   assert.ok(commentaryTexts[0].includes("第二段"));
+  assert.equal(commentaryTexts[0], "我先检查第一段内容。版本 0.162.1。然后继续补上第二段。完成时补齐的结论。");
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "commentary chunks final"));
   assert.equal(events.some((event) => event.type === "assistant.completed" && event.text.includes("第一段内容")), false);
 });

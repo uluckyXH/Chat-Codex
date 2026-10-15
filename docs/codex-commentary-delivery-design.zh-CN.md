@@ -1,5 +1,7 @@
 # Codex Commentary 旁白投递设计
 
+2026-10-15 更新：旁白独立投递已实现；本次进一步修复同一 item 的小 delta 被切成多条日志／消息的问题，改为在 `item/completed` 时发布一次完整正文。详见[修复进度](2026-10-15-codex-commentary-fragmentation-fix.zh-CN.md)、[修复前排查](2026-10-15-codex-commentary-fragmentation-analysis.zh-CN.md)。
+
 ## 背景
 
 Issue #4 反馈：部分 skill 在工作时输出了 `commentary`，但微信聊天里没有看到；后续再问 Codex “上一条消息是什么”时，模型能复述出来。
@@ -7,11 +9,11 @@ Issue #4 反馈：部分 skill 在工作时输出了 `commentary`，但微信聊
 当前代码路径是：
 
 1. Codex app-server 产生 `item.type=agentMessage` 且 `phase=commentary`。
-2. `src/codex/app-server/turn-controller.ts` 把它映射为 `assistant.progress`，`kind=other`。
-3. Bridge 按 `/progress` 和渠道投递策略处理普通进度。
-4. 微信默认 `/progress silent`，不会投递普通进度；即使切到 `brief`，也会经过进度节流、合并、失败冷却和微信侧真实投递限制。
+2. `src/codex/app-server/turn-controller.ts` 按 item ID 累积 delta，收到完成事件后发出完整 `assistant.commentary`。
+3. Bridge 独立旁白投递器记录完整本地旁白，并按 `/progress`、Plan 模式和渠道策略投递。
+4. 微信默认 `/progress silent`，普通模式的旁白仅本地可见；`brief`／Plan 可以低频合并投递，仍受失败冷却和微信侧真实限制约束。没有最终回复时另有完整旁白兜底。
 
-因此这不是 skill 未执行，也不是 Codex 上下文丢失，而是“对用户有价值的旁白”被混进了普通进度通道。
+初始问题是“对用户有价值的旁白”被混进普通进度通道；后续碎片化问题则来自错误的消息边界。两者分别由独立事件和完成正文收束处理。
 
 ## 目标
 
@@ -35,17 +37,17 @@ Issue #4 反馈：部分 skill 在工作时输出了 `commentary`，但微信聊
 - 普通进度：reasoning 摘要、命令摘要、搜索、文件变更等 `assistant.progress`。
 - 最终回复：`assistant.completed` 或 `assistant.plan` 组成的最终可见内容。
 
-## 当前问题
+## 初始设计处理的问题
 
 ### 旁白和进度混在一起
 
-`commentary` 当前被映射为：
+引入独立旁白事件之前，`commentary` 被映射为：
 
 ```ts
 { type: "assistant.progress", kind: "other", text }
 ```
 
-这会导致：
+这曾导致：
 
 - 微信默认 `silent` 下完全不投递。
 - `brief` 下虽然允许 `other`，但仍和普通进度共用节流、合并和失败冷却。
@@ -55,17 +57,17 @@ Issue #4 反馈：部分 skill 在工作时输出了 `commentary`，但微信聊
 
 官方 Plan item 当前会走 `assistant.plan`，最后拼进最终回复投递。这个路径基本可见。
 
-但如果 plan 流程或 writing-plan skill 只输出 `commentary`，没有产生 `item.type=plan` 或 `final_answer`，它仍会被当作普通进度处理，微信默认看不到。
+如果 plan 流程或 writing-plan skill 只输出 `commentary`，没有产生 `item.type=plan` 或 `final_answer`，原实现会把它当普通进度处理。当前通过 Plan 旁白投递和 commentary-only 兜底处理。
 
 ## 方案概览
 
-新增独立事件：
+独立事件表示一条**已经完成**的旁白，不表示任意传输片段：
 
 ```ts
 { type: "assistant.commentary"; sessionId: string; turnId: string; text: string; itemId?: string }
 ```
 
-Bridge 新增独立旁白投递器，和普通进度投递器并列：
+Bridge 使用独立旁白投递器，和普通进度投递器并列：
 
 ```text
 Codex app-server commentary
@@ -92,17 +94,19 @@ reasoning / command / search / file_change
 - `/plan` 模式：默认开启旁白投递，只投递旁白和最终计划/最终回复，不因此开启命令进度、工具生命周期或 realtime。
 - 不开放 `/progress realtime`。
 
-微信旁白投递必须低频合并，避免连续消息触发真实平台限制。建议沿用 brief 的节流量级，但使用独立状态：
+微信旁白沿用 brief 的 3 秒合并间隔，并使用独立状态：
 
 - 单 route 独立 `lastSentAt`。
 - 独立 pending commentary。
-- 独立 recent 去重。
+- 按 session／turn／item 身份去重，正文相同的不同消息保留。
 - 独立失败冷却。
+
+首条完整旁白可立即投递，间隔内的后续完整旁白按顺序合并，轮次结束时 flush。pending 不再只保留最后三条，旁白层不再按 1200 字符截断。渠道仍可能拒绝过长正文，通用分段／文件降级是另一个工作项。
 
 ### 飞书
 
 - 默认 `brief`：投递旁白和普通 brief 进度。
-- `/progress realtime`：旁白可以逐条投递，跟随飞书 realtime 能力。
+- `/progress realtime`：每条旁白在 item 完成后及时投递，跟随飞书 realtime 能力；不是每个 delta 各发一条。
 - `/progress silent`：非 plan 旁白默认不投递。
 - `/plan` 模式：默认开启旁白投递。
 
@@ -146,9 +150,9 @@ Bridge 应将最后一段完整旁白作为最终回复兜底发送。
 
 为了避免重复：
 
-- `BridgeCommentaryDelivery.handleCommentary()` 应返回是否成功投递。
-- turn state 记录 `lastCommentaryText` 和 `lastCommentaryDeliveredText`。
-- 如果 commentary-only 兜底文本已经成功作为旁白投递过，可以不重复发送最终回复。
+- `BridgeCommentaryDelivery.handleCommentary()` 返回该消息的完整正文和可更新的投递回执。
+- 前后台 turn state 保存最后一条旁白的回执；定时 flush 成功后也会更新同一份回执，结束时等待在途发送完成。
+- 如果这条消息已经成功作为旁白投递过，不重复发送最终回复；不能只凭正文相同或包含关系判定送达。
 - 如果旁白投递失败或被策略抑制，则最终兜底必须发送。
 
 ## `/fff` 与 README 说明
@@ -188,9 +192,11 @@ README 的聊天内命令表也应更新：
 
 - `phase=commentary` 不再发 `assistant.progress kind=other`。
 - 新增 `assistant.commentary`。
-- commentary delta 继续做草稿缓冲，避免每个 delta 都触发渠道投递。
-- item completed 时补齐完整旁白文本。
+- commentary delta 只在 `AssistantMessages` 中累积，不进入按标点／换行／400 字符刷新的 progress 草稿。
+- item completed 时以权威正文发布一次完整旁白，包含 completion 中的补充或修正。
 - 记录当前 turn 最后一个完整 commentary，供 Bridge 兜底。
+- 同一 item 重复完成、完成后迟到 delta 不再发布；正文内的重复句子不删除。
+- 已知为 commentary 但缺少 completed 的残片不当作完整消息发布。失败／中断使用终止通知，不拿残片做最终回复。
 
 ### Bridge 投递层
 
@@ -206,7 +212,7 @@ README 的聊天内命令表也应更新：
 要求：
 
 - 新增 `BridgeCommentaryDelivery`。
-- 与 `BridgeProgressDelivery` 独立维护节流、pending、recent、失败冷却。
+- 与 `BridgeProgressDelivery` 独立维护节流、pending、item 去重、失败冷却。
 - `route-queue` 和 `background-turns` 都必须处理 `assistant.commentary`。
 - finish turn 时执行 commentary-only 兜底。
 - `/plan` 下旁白可见，不开启普通 progress realtime。
@@ -223,6 +229,7 @@ README 的聊天内命令表也应更新：
 - 增加 `observedCommentary`、`outboundCommentary`、`localCommentary` 或等价命名。
 - TUI 日志显示为“旁白”，不要再混进“进度”。
 - 微信/飞书聊天正文不强加 `Codex 旁白:` 前缀，避免干扰用户阅读；只在本地日志中标注类型。
+- 每个完成 item 追加一条完整本地观察记录；成功发送和失败诊断可各有独立记录。TUI 自动换行不是新消息，不把网络片段另记成多条旁白。
 
 ### 文档
 
@@ -243,11 +250,12 @@ README 必须说明微信投递限制、`/fff` 作用、`/plan` 默认旁白投�
 - 功能实现后必须自测。
 - 必须在 `reports/tests/` 留中文测试报告。
 
-建议新增或更新测试：
+现有回归范围包括（最新结果见[修复进度](2026-10-15-codex-commentary-fragmentation-fix.zh-CN.md)）：
 
 1. app-server 单测：
    - `phase=commentary` 产出 `assistant.commentary`，不再产出 `assistant.progress kind=other`。
-   - chunked commentary 不重复。
+   - 相同正文按单块／逐字／标点／换行／400 字符分块，均在 item 完成时产生一条完整旁白。
+   - completion 补充／替换／清空、同文不同 item、重复／迟到通知、失败／中断和不完整 item。
    - commentary 后有 `final_answer` 时不产生 commentary-only 兜底。
    - commentary-only 时 Bridge 可以拿到最后完整旁白。
 
@@ -281,7 +289,8 @@ git diff --check
 
 - 微信真实渠道仍可能因为连续消息失败。旁白独立投递只能避免被普通进度卡掉，不能保证平台永远接收。
 - `/plan` 在微信默认 `silent` 下仍展示旁白，和“silent 不投递进度”不冲突，因为旁白已从普通进度中拆出；README 和 `/help` 必须讲清楚。
-- commentary-only 兜底可能在极端场景下与已成功投递的旁白重复，需通过 turn state 记录成功投递文本来降低重复。
+- commentary-only 依据该条消息的回执避免重复；平台实际接收但回执丢失时，仍无法保证端到端恰好发送一次。
+- 完成之前不输出新的旁白日志或 IM 消息，换取稳定的消息边界。无需等整个任务结束；本次不增加 TUI 实时草稿预览。
 - 如果 Codex 后续协议新增更明确的用户可见消息类型，应优先映射到更精确事件，而不是继续扩大 commentary 语义。
 
 ## 结论

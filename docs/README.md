@@ -4,6 +4,12 @@
 
 ## 文档用途
 
+- `2026-10-15-codex-commentary-fragmentation-fix.zh-CN.md`
+  Codex 旁白碎片化修复：按 item 完成发布全文，保留合并正文，按消息身份去重，前后台通过投递回执处理完整兜底。已完成 721 项全量回归；测试结果见 `reports/tests/2026-10-15-codex-commentary-fragmentation-fix.md`，故障电脑更新后仍需现场核验。
+
+- `2026-10-15-codex-commentary-fragmentation-analysis.zh-CN.md`
+  Codex 旁白被拆成大量短日志的修复前源码排查：对比官方 delta／item 完成语义，复现提前刷新、完成全文被跳过、brief 遗漏和 commentary-only 兜底残片。保留 179 项既有测试及 19 组诊断探针证据；当前实现见上述修复文档。
+
 - `2026-10-15-feishu-reply-context-adaptation.zh-CN.md`
   飞书入站回复原文适配：私聊／群聊按直接父消息 ID 读取文本、Markdown 和附件，接入现有 Codex 引用输入；覆盖权限后加载、命令／三题问答隔离、失败降级和本地引用日志。已完成 655 项全量回归，真实租户待验收；适配前检查点 `2aa8101` 已推送。
 

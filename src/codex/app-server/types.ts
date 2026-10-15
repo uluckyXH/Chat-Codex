@@ -77,13 +77,11 @@ export interface TurnQueueRecord {
   assistantMessages: AssistantMessages;
   emittedProgressItemIds: Set<string>;
   emittedProgress: Set<string>;
-  emittedCommentary: Set<string>;
   closed: boolean;
 }
 
 export interface ProgressDraft {
-  type: "progress" | "commentary";
-  kind?: CodexProgressKind;
+  kind: CodexProgressKind;
   text: string;
   prefix?: string;
 }

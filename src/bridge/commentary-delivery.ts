@@ -2,13 +2,11 @@ import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelTarget } from "../protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../protocol/delivery-policy.js";
 import type { BridgeDelivery } from "./delivery.js";
-import { truncateForChannel } from "./formatters.js";
 
 export interface BridgeCommentaryDeliveryOptions {
   delivery: BridgeDelivery;
   transcript?: TranscriptSink;
   minIntervalMs?: number;
-  maxCommentaryChars?: number;
   now?: () => number;
   shouldDeliverCommentary(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
   isRealtimeCommentary?(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
@@ -19,12 +17,15 @@ export interface BridgeCommentaryInput {
   target: ChannelTarget;
   policy: ChannelDeliveryPolicy;
   text: string;
+  sessionId?: string;
+  turnId?: string;
+  itemId?: string;
 }
 
+/** A message receipt retained by the caller; timed flushes update delivered in place. */
 export interface CommentaryDeliveryResult {
   text: string;
   delivered: boolean;
-  deliveredText?: string;
 }
 
 export interface CommentaryFlushResult {
@@ -34,26 +35,23 @@ export interface CommentaryFlushResult {
 
 interface PendingCommentary {
   target: ChannelTarget;
-  texts: string[];
+  messages: CommentaryDeliveryResult[];
 }
 
 interface RouteCommentaryState {
   lastSentAt?: number;
-  recent: string[];
+  items: Map<string, CommentaryDeliveryResult>;
   pending?: PendingCommentary;
   flushTimer?: ReturnType<typeof setTimeout>;
+  inFlight?: Promise<CommentaryFlushResult>;
 }
 
 const DEFAULT_MIN_INTERVAL_MS = 3000;
-const DEFAULT_MAX_COMMENTARY_CHARS = 1200;
-const MAX_PENDING_TEXTS = 3;
-const MAX_RECENT_TEXTS = 20;
 
 export class BridgeCommentaryDelivery {
   private readonly delivery: BridgeDelivery;
   private readonly transcript?: TranscriptSink;
   private readonly minIntervalMs: number;
-  private readonly maxCommentaryChars: number;
   private readonly now: () => number;
   private readonly shouldDeliverCommentary: BridgeCommentaryDeliveryOptions["shouldDeliverCommentary"];
   private readonly isRealtimeCommentary: NonNullable<BridgeCommentaryDeliveryOptions["isRealtimeCommentary"]>;
@@ -63,57 +61,62 @@ export class BridgeCommentaryDelivery {
     this.delivery = options.delivery;
     this.transcript = options.transcript;
     this.minIntervalMs = Math.max(0, options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS);
-    this.maxCommentaryChars = Math.max(120, options.maxCommentaryChars ?? DEFAULT_MAX_COMMENTARY_CHARS);
     this.now = options.now ?? (() => Date.now());
     this.shouldDeliverCommentary = options.shouldDeliverCommentary;
     this.isRealtimeCommentary = options.isRealtimeCommentary ?? (() => false);
   }
 
   async handleCommentary(input: BridgeCommentaryInput): Promise<CommentaryDeliveryResult> {
-    const body = input.text.trim();
-    if (!body) return { text: body, delivered: false };
-    if (input.policy.progress === "suppress") {
-      this.recordLocalCommentary(input.target, this.formatCommentary([body]));
-      return { text: body, delivered: false };
-    }
-    if (!this.shouldDeliverCommentary(input.policy, input.routeKey)) {
-      this.recordLocalCommentary(input.target, this.formatCommentary([body]));
-      return { text: body, delivered: false };
-    }
-
-    if (this.isRealtimeCommentary(input.policy, input.routeKey)) {
-      this.recordObservedCommentary(input.target, body);
-      const delivered = await this.delivery.sendRealtimeCommentaryText(input.routeKey, input.target, body);
-      return { text: body, delivered, ...(delivered ? { deliveredText: body } : {}) };
-    }
-
+    const receipt: CommentaryDeliveryResult = { text: input.text, delivered: false };
+    if (!input.text.trim()) return receipt;
     const state = this.stateFor(input.routeKey);
-    const normalized = normalizeCommentaryText(body);
-    if (this.hasRecent(state, normalized)) return { text: body, delivered: false };
-    this.rememberRecent(state, normalized);
-    this.recordObservedCommentary(input.target, body);
-
-    const now = this.now();
-    if (!state.pending && (state.lastSentAt === undefined || now - state.lastSentAt >= this.minIntervalMs)) {
-      const deliveredText = await this.sendNow(input.routeKey, input.target, [body], now);
-      return { text: body, delivered: Boolean(deliveredText), ...(deliveredText ? { deliveredText } : {}) };
+    const itemKey = input.itemId ? JSON.stringify([input.sessionId, input.turnId, input.itemId]) : undefined;
+    if (itemKey) {
+      const existing = state.items.get(itemKey);
+      if (existing) return existing;
+      state.items.set(itemKey, receipt);
+    }
+    if (input.policy.progress === "suppress" || !this.shouldDeliverCommentary(input.policy, input.routeKey)) {
+      this.recordLocalCommentary(input.target, receipt.text);
+      return receipt;
     }
 
-    state.pending = mergePending(state.pending, input.target, body);
-    const due = await this.flushIfDue(input.routeKey, state);
-    if (due.delivered) return { text: body, delivered: true, ...(due.deliveredText ? { deliveredText: due.deliveredText } : {}) };
-    this.scheduleFlush(input.routeKey, state);
-    return { text: body, delivered: false };
+    this.recordObservedCommentary(input.target, receipt.text);
+    if (this.isRealtimeCommentary(input.policy, input.routeKey)) {
+      receipt.delivered = await this.delivery.sendRealtimeCommentaryText(input.routeKey, input.target, receipt.text);
+      return receipt;
+    }
+
+    state.pending ??= { target: input.target, messages: [] };
+    state.pending.messages.push(receipt);
+    const now = this.now();
+    if (!state.inFlight && (state.lastSentAt === undefined || now - state.lastSentAt >= this.minIntervalMs)) {
+      await this.flushRoute(input.routeKey);
+    } else {
+      this.scheduleFlush(input.routeKey, state);
+    }
+    return receipt;
   }
 
   async flushRoute(routeKey: string): Promise<CommentaryFlushResult> {
     const state = this.routes.get(routeKey);
-    const pending = state?.pending;
-    if (!state || !pending) return { delivered: false };
+    if (!state) return { delivered: false };
+    // A timer may already be sending the last item. Wait for its receipt before
+    // the turn decides whether a commentary-only fallback is still necessary.
+    while (state.inFlight) await state.inFlight;
+    if (this.routes.get(routeKey) !== state) return { delivered: false };
+    const pending = state.pending;
+    if (!pending) return { delivered: false };
     state.pending = undefined;
     clearFlushTimer(state);
-    const deliveredText = await this.sendNow(routeKey, pending.target, pending.texts, this.now());
-    return { delivered: Boolean(deliveredText), ...(deliveredText ? { deliveredText } : {}) };
+    state.lastSentAt = this.now();
+    const sending = this.sendPending(routeKey, pending);
+    state.inFlight = sending;
+    try {
+      return await sending;
+    } finally {
+      state.inFlight = undefined;
+    }
   }
 
   clearRoute(routeKey: string): void {
@@ -130,27 +133,16 @@ export class BridgeCommentaryDelivery {
   private stateFor(routeKey: string): RouteCommentaryState {
     const existing = this.routes.get(routeKey);
     if (existing) return existing;
-    const next: RouteCommentaryState = { recent: [] };
+    const next: RouteCommentaryState = { items: new Map() };
     this.routes.set(routeKey, next);
     return next;
   }
 
-  private async sendNow(routeKey: string, target: ChannelTarget, texts: string[], sentAt: number): Promise<string | undefined> {
-    const state = this.stateFor(routeKey);
-    state.lastSentAt = sentAt;
-    const text = this.formatCommentary(texts);
-    return await this.delivery.sendCommentaryText(routeKey, target, text) ? text : undefined;
-  }
-
-  private async flushIfDue(routeKey: string, state: RouteCommentaryState): Promise<CommentaryFlushResult> {
-    const pending = state.pending;
-    if (!pending) return { delivered: false };
-    const now = this.now();
-    if (state.lastSentAt !== undefined && now - state.lastSentAt < this.minIntervalMs) return { delivered: false };
-    state.pending = undefined;
-    clearFlushTimer(state);
-    const deliveredText = await this.sendNow(routeKey, pending.target, pending.texts, now);
-    return { delivered: Boolean(deliveredText), ...(deliveredText ? { deliveredText } : {}) };
+  private async sendPending(routeKey: string, pending: PendingCommentary): Promise<CommentaryFlushResult> {
+    const text = pending.messages.map((message) => message.text).join("\n\n");
+    const delivered = await this.delivery.sendCommentaryText(routeKey, pending.target, text);
+    if (delivered) for (const message of pending.messages) message.delivered = true;
+    return { delivered, ...(delivered ? { deliveredText: text } : {}) };
   }
 
   private scheduleFlush(routeKey: string, state: RouteCommentaryState): void {
@@ -180,35 +172,6 @@ export class BridgeCommentaryDelivery {
     }
     this.transcript?.localProgress?.(target, text);
   }
-
-  private formatCommentary(texts: string[]): string {
-    const body = texts
-      .map((text) => text.trim())
-      .filter(Boolean)
-      .join("\n\n");
-    return truncateForChannel(body, this.maxCommentaryChars);
-  }
-
-  private hasRecent(state: RouteCommentaryState, normalized: string): boolean {
-    return state.recent.includes(normalized);
-  }
-
-  private rememberRecent(state: RouteCommentaryState, normalized: string): void {
-    state.recent.push(normalized);
-    if (state.recent.length > MAX_RECENT_TEXTS) state.recent.shift();
-  }
-}
-
-function mergePending(pending: PendingCommentary | undefined, target: ChannelTarget, text: string): PendingCommentary {
-  const texts = [...(pending?.texts ?? []), text].slice(-MAX_PENDING_TEXTS);
-  return { target, texts };
-}
-
-function normalizeCommentaryText(text: string): string {
-  return text
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
 }
 
 function commentaryFlushDelay(now: number, lastSentAt: number | undefined, minIntervalMs: number): number {

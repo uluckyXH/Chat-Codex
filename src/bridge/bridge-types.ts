@@ -10,6 +10,7 @@ import type { TurnScheduler } from "./turn-scheduler.js";
 import type { PairingCodeManager } from "./pairing-code-manager.js";
 import type { ContextRefreshPolicy } from "../context-refresh/types.js";
 import type { CodexSessionContextFingerprint } from "../codex/session-context-fingerprint.js";
+import type { CommentaryDeliveryResult } from "./commentary-delivery.js";
 
 export interface BridgeOptions {
   channel?: ChannelAdapter;
@@ -77,8 +78,7 @@ export interface BackgroundTurnState {
   target: ChannelTarget;
   finalText: string;
   finalPlanText: string;
-  lastCommentaryText: string;
-  lastDeliveredCommentaryText: string;
+  lastCommentary?: CommentaryDeliveryResult;
   typingTimer?: ReturnType<typeof setTimeout>;
   stopTyping?: () => void;
 }

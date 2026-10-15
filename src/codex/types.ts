@@ -235,6 +235,7 @@ export type CodexEvent =
   | { type: "turn.started"; sessionId: string; turnId: string; startedAt?: string }
   | { type: "context.compaction"; sessionId: string; turnId: string; phase: "started" | "completed" }
   | { type: "assistant.progress"; sessionId: string; turnId: string; text: string; kind?: CodexProgressKind }
+  /** One completed commentary item, never an individual streaming delta. */
   | { type: "assistant.commentary"; sessionId: string; turnId: string; text: string; itemId?: string }
   | { type: "tool.progress"; sessionId: string; turnId: string; progress: CodexToolProgress }
   | { type: "codex.notification"; sessionId: string; turnId: string; notification: CodexNotification }

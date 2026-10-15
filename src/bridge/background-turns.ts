@@ -132,16 +132,15 @@ export class BridgeBackgroundTurns {
         kind: event.kind,
       });
     } else if (event.type === "assistant.commentary") {
-      state.lastCommentaryText = event.text;
-      const result = await this.commentaryDelivery.handleCommentary({
+      state.lastCommentary = await this.commentaryDelivery.handleCommentary({
         routeKey: state.routeKey,
         target: state.target,
         policy: deliveryPolicy,
         text: event.text,
+        sessionId: event.sessionId,
+        turnId: event.turnId,
+        itemId: event.itemId,
       });
-      if (result.deliveredText?.includes(event.text)) {
-        state.lastDeliveredCommentaryText = event.text;
-      }
     } else if (event.type === "tool.progress") {
       if (this.shouldDeliverToolProgressWithPolicy(deliveryPolicy, state.routeKey)) {
         await this.delivery.sendToolProgress(state.routeKey, state.target, {
@@ -257,8 +256,6 @@ export class BridgeBackgroundTurns {
       target: targetWithTurnRunId(target, event.turnId),
       finalText: "",
       finalPlanText: "",
-      lastCommentaryText: "",
-      lastDeliveredCommentaryText: "",
     };
     this.turns.set(event.turnId, state);
     return state;
@@ -267,15 +264,12 @@ export class BridgeBackgroundTurns {
   private async finishTurn(turnId: string, state: BackgroundTurnState, sendFinal = true): Promise<void> {
     this.stopTypingKeepalive(state);
     await this.progressDelivery.flushRoute(state.routeKey);
-    const commentaryFlush = await this.commentaryDelivery.flushRoute(state.routeKey);
-    if (state.lastCommentaryText && commentaryFlush.deliveredText?.includes(state.lastCommentaryText)) {
-      state.lastDeliveredCommentaryText = state.lastCommentaryText;
-    }
+    await this.commentaryDelivery.flushRoute(state.routeKey);
     const composedFinalText = composeFinalAnswer(state.finalPlanText, state.finalText);
     if (sendFinal && composedFinalText) {
       await this.delivery.sendText(state.target, composedFinalText);
-    } else if (sendFinal && state.lastCommentaryText && state.lastDeliveredCommentaryText !== state.lastCommentaryText) {
-      await this.delivery.sendText(state.target, state.lastCommentaryText);
+    } else if (sendFinal && state.lastCommentary?.text && !state.lastCommentary.delivered) {
+      await this.delivery.sendText(state.target, state.lastCommentary.text);
     }
     await this.delivery.sendTyping(state.target, false);
     this.progressDelivery.clearRoute(state.routeKey);

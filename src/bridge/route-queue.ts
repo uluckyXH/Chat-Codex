@@ -17,7 +17,7 @@ import type { BridgeDelivery } from "./delivery.js";
 import type { SessionContextRefreshManager } from "./context-refresh.js";
 import { contextCompactionNotice } from "./context-compaction.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
-import { BridgeCommentaryDelivery } from "./commentary-delivery.js";
+import { BridgeCommentaryDelivery, type CommentaryDeliveryResult } from "./commentary-delivery.js";
 import { BridgeNotificationDelivery } from "./notification-delivery.js";
 import { BridgePendingInputManager } from "./pending-input.js";
 import type { BridgeSessionFlow } from "./session-flow.js";
@@ -274,8 +274,7 @@ export class BridgeRouteQueue {
         await this.delivery.withTyping(target, async () => {
           let finalText = "";
           let finalPlanText = "";
-          let lastCommentaryText = "";
-          let lastDeliveredCommentaryText = "";
+          let lastCommentary: CommentaryDeliveryResult | undefined;
           let turnFailed = false;
           let currentTurnStartedAt: string | undefined;
           const prepared = this.preparePrompt ? this.preparePrompt(message, prompt, sendFile) : prompt;
@@ -307,16 +306,15 @@ export class BridgeRouteQueue {
                 kind: event.kind,
               });
             } else if (event.type === "assistant.commentary") {
-              lastCommentaryText = event.text;
-              const result = await this.commentaryDelivery.handleCommentary({
+              lastCommentary = await this.commentaryDelivery.handleCommentary({
                 routeKey: message.routeKey,
                 target,
                 policy: deliveryPolicy,
                 text: event.text,
+                sessionId: event.sessionId,
+                turnId: event.turnId,
+                itemId: event.itemId,
               });
-              if (result.deliveredText?.includes(event.text)) {
-                lastDeliveredCommentaryText = event.text;
-              }
             } else if (event.type === "tool.progress") {
               if (this.shouldDeliverToolProgressWithPolicy(deliveryPolicy, message.routeKey)) {
                 await this.delivery.sendToolProgress(message.routeKey, target, {
@@ -410,10 +408,7 @@ export class BridgeRouteQueue {
             }
           }
           await this.progressDelivery.flushRoute(message.routeKey);
-          const commentaryFlush = await this.commentaryDelivery.flushRoute(message.routeKey);
-          if (lastCommentaryText && commentaryFlush.deliveredText?.includes(lastCommentaryText)) {
-            lastDeliveredCommentaryText = lastCommentaryText;
-          }
+          await this.commentaryDelivery.flushRoute(message.routeKey);
           const composedFinalText = composeFinalAnswer(finalPlanText, finalText);
           if (!turnFailed && composedFinalText) {
             const visibleText = sendFile ? stripBridgeSendFileRefs(composedFinalText) : composedFinalText;
@@ -421,8 +416,8 @@ export class BridgeRouteQueue {
             if (sendFile) {
               await this.delivery.sendRequestedFiles(target, composedFinalText, session.cwd);
             }
-          } else if (!turnFailed && lastCommentaryText && lastDeliveredCommentaryText !== lastCommentaryText) {
-            await this.delivery.sendText(target, lastCommentaryText);
+          } else if (!turnFailed && lastCommentary?.text && !lastCommentary.delivered) {
+            await this.delivery.sendText(target, lastCommentary.text);
           }
         });
       }, { signal: abortController.signal });

@@ -54,7 +54,6 @@ export function createTurnQueueRecord(
     assistantMessages: new AssistantMessages(),
     emittedProgressItemIds: new Set(),
     emittedProgress: new Set(),
-    emittedCommentary: new Set(),
     closed: false,
   };
 }
