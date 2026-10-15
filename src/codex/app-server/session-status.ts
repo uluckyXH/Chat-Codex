@@ -10,6 +10,8 @@ import type { AppServerSessionRecord } from "./types.js";
 export function withContext(record: AppServerSessionRecord, status: CodexSessionBaseStatus): CodexSessionStatus {
   return {
     ...status,
+    ...(record.status.goal !== undefined ? { goal: record.status.goal } : {}),
+    ...(record.status.effectiveSettings ? { effectiveSettings: record.status.effectiveSettings } : {}),
     ...(record.status.context ? { context: record.status.context } : {}),
     ...(record.status.model ? { model: record.status.model } : {}),
     ...(record.status.cwdDiagnostic ? { cwdDiagnostic: record.status.cwdDiagnostic } : {}),

@@ -13,7 +13,7 @@ type ApprovalDecisionSource = Pick<ApprovalRequest, "kind" | "availableDecisions
 
 export function availableApprovalDecisions(approval: ApprovalDecisionSource): ApprovalDecision[] {
   const configured = approval.availableDecisions;
-  if (configured && configured.length > 0) return [...new Set(configured)];
+  if (configured !== undefined) return [...new Set(configured)];
   if (approval.kind === "terminal_input") return [...TERMINAL_INPUT_APPROVAL_DECISIONS];
   return [...DEFAULT_APPROVAL_DECISIONS];
 }

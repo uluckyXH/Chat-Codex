@@ -109,6 +109,7 @@ export async function materializeChannelMedia(params: {
 export async function uploadLocalMediaToWeixin(params: {
   api: WeixinApiClient;
   token: string;
+  baseUrl?: string;
   filePath: string;
   toUserId: string;
   cdnBaseUrl: string;
@@ -123,6 +124,7 @@ export async function uploadLocalMediaToWeixin(params: {
   const aeskey = crypto.randomBytes(16);
   const upload = await params.api.getUploadUrl({
     token: params.token,
+    baseUrl: params.baseUrl,
     timeoutMs: params.timeoutMs,
     body: {
       filekey,

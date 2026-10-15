@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type {
   CodexAdapter,
+  CodexAdapterCapabilities,
   CodexEvent,
   CodexProgressKind,
   CodexRunPolicyStatus,
@@ -68,6 +69,10 @@ export class ExecCodexAdapter implements CodexAdapter {
     return session;
   }
 
+  getCapabilities(): CodexAdapterCapabilities {
+    return { mode: "exec", interactiveApprovals: false, userInput: false, goals: false, steering: false, modelList: false, messagePhases: false, asyncQuestions: false };
+  }
+
   async resumeSession(sessionId: string): Promise<CodexSession> {
     return this.loadSession(sessionId, false);
   }
@@ -122,10 +127,12 @@ export class ExecCodexAdapter implements CodexAdapter {
     }
     const running: RunningExecProcess = { child, cancelRequested: false };
     this.runningProcesses.set(sessionId, running);
+    let processError: Error | undefined;
     const closePromise = new Promise<number | null>((resolve) => {
+      child.on("error", (error) => { processError = error; });
       child.on("close", resolve);
     });
-    let finalText = "";
+    let failed = false;
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
@@ -142,9 +149,11 @@ export class ExecCodexAdapter implements CodexAdapter {
           stored.updatedAt = new Date().toISOString();
         }
         const event = parsed?.event;
-        if (!event) continue;
-        if (event.type === "assistant.completed") finalText = event.text;
-        if (event.type === "turn.failed") stored.status = { type: "failed", error: event.error };
+        if (!event || failed) continue;
+        if (event.type === "turn.failed") {
+          failed = true;
+          stored.status = { type: "failed", error: event.error };
+        }
         yield event;
       }
     } catch (error) {
@@ -153,30 +162,30 @@ export class ExecCodexAdapter implements CodexAdapter {
 
     const code = await closePromise;
     this.runningProcesses.delete(sessionId);
+    if (failed) return;
     if (running.cancelRequested) {
-      stored.status = { type: "idle" };
+      stored.status = { type: "interrupted" };
       stored.updatedAt = new Date().toISOString();
-      yield { type: "turn.completed", sessionId, turnId };
+      yield { type: "turn.interrupted", sessionId, turnId };
       return;
     }
-    if (code === 0) {
+    if (code === 0 && !processError) {
       stored.status = { type: "idle" };
       stored.updatedAt = new Date().toISOString();
       yield { type: "turn.completed", sessionId, turnId };
     } else {
-      const error = stderr || `codex exec exited with code ${code}`;
+      const error = processError?.message ?? (stderr || `codex exec exited with code ${code}`);
       stored.status = { type: "failed", error };
       stored.updatedAt = new Date().toISOString();
       yield { type: "turn.failed", sessionId, turnId, error };
     }
-    void finalText;
   }
 
   async cancel(sessionId: string): Promise<void> {
     const running = this.runningProcesses.get(sessionId);
     const stored = this.sessions.get(sessionId);
     if (stored) {
-      stored.status = { type: "idle" };
+      stored.status = { type: "interrupted" };
       stored.updatedAt = new Date().toISOString();
     }
     if (!running) return;

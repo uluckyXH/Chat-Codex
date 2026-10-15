@@ -87,3 +87,19 @@ test("normalizeWeixinAccountId creates file-safe account ids", () => {
   assert.equal(normalizeWeixinAccountId("abc@im.bot"), "abc-im-bot");
   assert.equal(normalizeWeixinAccountId("abc@im.wechat"), "abc-im-wechat");
 });
+
+test("Weixin maps quoted video and untranslated voice as files while preserving voice transcripts", () => {
+  const message = weixinMessageToChannelMessage("wx", "bot", {
+    from_user_id: "user", item_list: [
+      { type: 1, text_item: { text: "查看引用" }, ref_msg: { message_item: { type: 5, video_item: { media: { full_url: "https://cdn.example/video", encrypt_type: 0 } } } } },
+      { type: 3, voice_item: { media: { full_url: "https://cdn.example/voice" } } },
+    ],
+  });
+  assert.equal(message.attachments?.[0].type, "file");
+  assert.equal(message.attachments?.[0].mimeType, "video/mp4");
+  assert.equal(message.attachments?.[0].caption, "引用附件");
+  assert.equal(message.attachments?.[1].mimeType, "audio/silk");
+  const transcribed = weixinMessageToChannelMessage("wx", "bot", { item_list: [{ type: 3, voice_item: { text: "语音内容", media: { full_url: "https://cdn.example/voice" } } }] });
+  assert.equal(transcribed.text, "语音内容");
+  assert.equal(transcribed.attachments, undefined);
+});

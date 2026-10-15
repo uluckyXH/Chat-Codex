@@ -49,7 +49,7 @@ export async function handleGoalCommand(
         await options.delivery.sendText(target, "当前没有绑定 Codex 会话，也没有可清除的 Goal。");
         return;
       }
-      const cleared = await options.codex.clearGoal(binding.sessionId);
+      const cleared = await options.codex.clearGoal(binding.sessionId, { origin: "user" });
       await options.delivery.sendText(target, cleared ? "已清除 Goal。后续任务不再按该长期目标追踪。" : "当前会话没有 Goal。");
       return;
     }
@@ -59,12 +59,12 @@ export async function handleGoalCommand(
         return;
       }
       const status: CodexGoalStatus = action === "pause" ? "paused" : "active";
-      const goal = await options.codex.setGoalStatus(binding.sessionId, status);
+      const goal = await options.codex.setGoalStatus(binding.sessionId, status, { origin: "user" });
       await options.delivery.sendText(target, goalText(goal, action === "pause" ? "已暂停 Goal。" : "已恢复 Goal。"));
       return;
     }
     const session = await options.sessionFlow.ensureSession(message);
-    const goal = await options.codex.setGoal(session.id, body);
+    const goal = await options.codex.setGoal(session.id, body, { origin: "user" });
     await options.delivery.sendText(target, goalText(goal, "已设置 Goal。"));
   } catch (error) {
     const staleSessionId = staleSessionIdFromError(error) ?? binding?.sessionId;

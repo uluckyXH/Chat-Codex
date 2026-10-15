@@ -1,6 +1,7 @@
-import type { CodexProgressKind } from "../types.js";
+import type { CodexProgressKind, CodexTurnError } from "../types.js";
 import { commandExecutionProgress } from "./command-output-summary.js";
 import { arrayValue, numberValue, objectValue, stringValue } from "./value-parsers.js";
+import { isAbsolute, win32 } from "node:path";
 
 export interface AppServerReconnectNotice {
   message: string;
@@ -8,8 +9,8 @@ export interface AppServerReconnectNotice {
   total: number;
 }
 
-export function messagePhaseValue(value: unknown): "commentary" | "final_answer" | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
+export function messagePhaseValue(value: unknown): "commentary" | "partial_answer" | "final_answer" | undefined {
+  return value === "commentary" || value === "partial_answer" || value === "final_answer" ? value : undefined;
 }
 
 export function progressFromThreadItem(item: Record<string, unknown>): { text: string; kind: CodexProgressKind } | undefined {
@@ -30,21 +31,39 @@ export function progressFromThreadItem(item: Record<string, unknown>): { text: s
       .filter(Boolean)
       .slice(0, 5)
       .join(", ");
-    return changes ? { text: `文件变更完成: ${changes}`, kind: "file_change" } : undefined;
+    return changes || itemFailed(item) ? { text: `文件变更${itemFailed(item) ? "失败" : "完成"}${changes ? `: ${changes}` : ""}`, kind: "file_change" } : undefined;
   }
   if (itemType === "mcpToolCall") {
     const tool = [stringValue(item.server), stringValue(item.tool)].filter(Boolean).join("/");
-    return tool ? { text: `工具调用完成: ${tool}`, kind: "tool" } : undefined;
+    return tool ? { text: `工具调用${itemFailed(item) ? "失败" : "完成"}: ${tool}`, kind: "tool" } : undefined;
   }
   if (itemType === "webSearch") {
     const query = stringValue(item.query);
-    return query ? { text: `搜索完成: ${query}`, kind: "search" } : undefined;
+    return query ? { text: `搜索${itemFailed(item) ? "失败" : "完成"}: ${query}`, kind: "search" } : undefined;
   }
-  if (itemType === "imageView" || itemType === "imageGeneration") {
-    const path = stringValue(item.path) ?? stringValue(item.savedPath) ?? stringValue(item.result);
-    return path ? { text: `媒体生成完成: ${path}`, kind: "file_change" } : undefined;
+  if (itemType === "imageView") {
+    const path = localImagePath(item.path);
+    return path ? { text: `图像查看完成: ${path}`, kind: "file_change" } : undefined;
+  }
+  if (itemType === "imageGeneration") {
+    if (itemFailed(item)) {
+      const failure = objectValue(item.failure);
+      return { text: failure.type === "usageLimitExceeded" ? "图像生成失败：已达到用量上限。" : "图像生成失败。", kind: "file_change" };
+    }
+    const path = localImagePath(item.savedPath);
+    return { text: path ? `媒体生成完成: ${path}` : "图像生成完成（未提供本地文件路径）。", kind: "file_change" };
   }
   return undefined;
+}
+
+export function itemFailed(item: Record<string, unknown>): boolean {
+  return ["failed", "error", "declined", "cancelled", "canceled"].includes(String(item.status).toLowerCase())
+    || item.failure != null || item.error != null || objectValue(item.result).isError === true;
+}
+
+function localImagePath(value: unknown): string | undefined {
+  const path = stringValue(value);
+  return path && !/^https?:|^data:/i.test(path) && !/[\r\n\0]/.test(path) && (isAbsolute(path) || win32.isAbsolute(path)) ? path : undefined;
 }
 
 export function textFromPlan(params: Record<string, unknown>): string | undefined {
@@ -68,6 +87,16 @@ export function appServerErrorMessage(params: Record<string, unknown>): string {
   return stringValue(objectValue(params.error).message)
     ?? stringValue(params.message)
     ?? "codex app-server error";
+}
+
+export function turnErrorDetails(value: unknown, message: string): CodexTurnError {
+  const error = objectValue(value);
+  return {
+    message,
+    ...(error.codexErrorInfo != null ? { codexErrorInfo: error.codexErrorInfo } : {}),
+    ...(stringValue(error.additionalDetails) ? { additionalDetails: stringValue(error.additionalDetails) } : {}),
+    ...(error.misalignment != null ? { misalignment: error.misalignment } : {}),
+  };
 }
 
 export function parseAppServerReconnectNotice(message: string): AppServerReconnectNotice | undefined {

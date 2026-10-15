@@ -2,17 +2,18 @@ import type { Writable } from "node:stream";
 import { env, stdout } from "node:process";
 import type { ChannelMedia, ChannelMessage, ChannelTarget } from "../protocol/channel.js";
 import { formatLocalClock } from "../time/display-time.js";
+import { inboundContextLines, receiptContextLines, type TranscriptReceipt } from "./message-context.js";
 
 export interface TranscriptSink {
   inbound(message: ChannelMessage, text: string): void;
-  outbound(target: ChannelTarget, text: string): void;
+  outbound(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void;
   observedCommentary?(target: ChannelTarget, text: string): void;
-  outboundCommentary?(target: ChannelTarget, text: string): void;
+  outboundCommentary?(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void;
   localCommentary?(target: ChannelTarget, text: string): void;
   observedProgress?(target: ChannelTarget, text: string): void;
-  outboundProgress?(target: ChannelTarget, text: string): void;
+  outboundProgress?(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void;
   localProgress?(target: ChannelTarget, text: string): void;
-  outboundMedia?(target: ChannelTarget, media: ChannelMedia): void;
+  outboundMedia?(target: ChannelTarget, media: ChannelMedia, receipt?: TranscriptReceipt): void;
 }
 
 export interface ConsoleTranscriptSinkOptions {
@@ -54,34 +55,38 @@ export class ConsoleTranscriptSink implements TranscriptSink {
       this.header(transcriptChannelLabel(message.channelId), "<=", transcriptInboundSubject(message), transcriptInboundDetail(message), tone),
       this.verbose ? `route: ${message.routeKey}` : undefined,
       this.verbose ? `sender: ${message.sender.id}` : undefined,
+      ...inboundContextLines(message).map((line) => `  ${line}`),
       ...this.bodyLines(text, tone),
     ]);
   }
 
-  outbound(target: ChannelTarget, text: string): void {
+  outbound(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void {
     const detail = classifyOutbound(text);
     const tone = toneForOutbound(detail);
     this.writeBlock([
       this.header(transcriptChannelLabel(target.channelId), "=>", transcriptTargetConversation(target), detail, tone),
       this.verbose ? `route: ${target.routeKey}` : undefined,
+      ...receiptContextLines(receipt).map((line) => `  ${line}`),
       ...this.bodyLines(text, tone),
     ]);
   }
 
-  outboundProgress(target: ChannelTarget, text: string): void {
+  outboundProgress(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void {
     const tone: TranscriptTone = "progress";
     this.writeBlock([
       this.header(transcriptChannelLabel(target.channelId), "=>", transcriptTargetConversation(target), "进度", tone),
       this.verbose ? `route: ${target.routeKey}` : undefined,
+      ...receiptContextLines(receipt).map((line) => `  ${line}`),
       ...this.bodyLines(text, tone),
     ]);
   }
 
-  outboundCommentary(target: ChannelTarget, text: string): void {
+  outboundCommentary(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void {
     const tone: TranscriptTone = "progress";
     this.writeBlock([
       this.header(transcriptChannelLabel(target.channelId), "=>", transcriptTargetConversation(target), "旁白", tone),
       this.verbose ? `route: ${target.routeKey}` : undefined,
+      ...receiptContextLines(receipt).map((line) => `  ${line}`),
       ...this.bodyLines(text, tone),
     ]);
   }
@@ -122,12 +127,13 @@ export class ConsoleTranscriptSink implements TranscriptSink {
     ]);
   }
 
-  outboundMedia(target: ChannelTarget, media: ChannelMedia): void {
+  outboundMedia(target: ChannelTarget, media: ChannelMedia, receipt?: TranscriptReceipt): void {
     const mediaName = media.name ?? media.path ?? media.url ?? "";
     const tone: TranscriptTone = "media";
     this.writeBlock([
       this.header(transcriptChannelLabel(target.channelId), "=>", transcriptTargetConversation(target), `媒体 ${media.type}`, tone),
       this.verbose ? `route: ${target.routeKey}` : undefined,
+      ...receiptContextLines(receipt).map((line) => `  ${line}`),
       ...this.bodyLines([
         mediaName ? `文件: ${mediaName}` : undefined,
         media.path ? `路径: ${media.path}` : undefined,

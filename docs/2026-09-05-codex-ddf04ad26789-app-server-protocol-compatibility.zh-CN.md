@@ -1,5 +1,7 @@
 # Codex app-server 协议适配清单（第一轮：只看协议）
 
+> 2026-10-15 后续审计：见[最新能力清单](2026-10-15-codex-cli-compatibility-audit.zh-CN.md)和[分阶段计划](2026-10-15-codex-cli-adaptation-plan.zh-CN.md)。writeStdin 与历史分页已完成；非阻塞输入、async 消息、历史失效和媒体失败等待办继续推进，并补充 partial_answer、Goal 来源及实验协议门禁等本轮发现。
+
 审计日期：2026-09-05
 Codex 源码基线：`references/openai-codex` @ `ddf04ad26789d040f9ef6a96736f76602e35a6cc`
 

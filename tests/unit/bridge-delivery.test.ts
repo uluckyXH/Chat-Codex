@@ -9,6 +9,7 @@ import { BRIDGE_SEND_FILE_PREFIX } from "../../src/bridge/media-extractor.js";
 import { SilentLogger, type Logger } from "../../src/logging/logger.js";
 import type { ChannelRegistry } from "../../src/channels/registry.js";
 import type { ChannelApprovalRequest, ChannelMedia, ChannelTarget } from "../../src/protocol/channel.js";
+import type { TranscriptReceipt } from "../../src/logging/message-context.js";
 
 class CapturingLogger implements Logger {
   readonly infos: Array<{ message: string; meta?: Record<string, unknown> }> = [];
@@ -35,6 +36,32 @@ test("BridgeDelivery swallows normal text send failures", async () => {
   await fixture.delivery.sendText(target(), "hello");
   assert.equal(fixture.textAttempts, 1);
   assert.deepEqual(fixture.sentTexts, []);
+});
+
+test("BridgeDelivery passes successful receipts to all text transcripts and never logs failed sends as delivered", async () => {
+  let fail = false;
+  const receipts: Array<TranscriptReceipt | undefined> = [];
+  const delivered = (_target: ChannelTarget, _text: string, receipt?: TranscriptReceipt) => { receipts.push(receipt); };
+  const delivery = new BridgeDelivery({
+    channels: { sendText: async () => {
+      if (fail) throw new Error("send failed");
+      return { channelId: "mock", messageId: "client", serverMessageId: "18446744073709551615", deliveredAt: "now" };
+    } } as unknown as ChannelRegistry,
+    approvals: new ApprovalManager(), logger: new SilentLogger(), approvalSendRetryDelayMs: 1,
+    transcript: { inbound() {}, outbound: delivered, outboundProgress: delivered, outboundCommentary: delivered },
+  });
+  await delivery.deliverText(target(), "reply");
+  await delivery.sendProgressText("route", target(), "progress");
+  await delivery.sendRealtimeProgressText("route", target(), "realtime progress");
+  await delivery.sendCommentaryText("route", target(), "commentary");
+  await delivery.sendRealtimeCommentaryText("route", target(), "realtime commentary");
+  assert.equal(receipts.length, 5);
+  assert.ok(receipts.every((receipt) => receipt?.serverMessageId === "18446744073709551615"));
+  fail = true;
+  await delivery.sendText(target(), "failed");
+  await delivery.sendProgressText("route", target(), "failed progress");
+  await delivery.sendCommentaryText("route", target(), "failed commentary");
+  assert.equal(receipts.length, 5);
 });
 
 test("BridgeDelivery logs target details when channel text delivery fails", async () => {

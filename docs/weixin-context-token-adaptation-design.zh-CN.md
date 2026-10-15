@@ -1,5 +1,7 @@
 # 微信 context_token / typing keepalive / run_id 适配设计
 
+> 本文包含历史实验方案。2026-10-15 的[排查与解决方案](2026-10-15-weixin-prepare-failed-analysis.zh-CN.md)已复现执行中任务不采用 `/fff` 新 token、长文本未分段和失败 final 无补发的问题。typing/getConfig 不作为续期依据，去 token fallback 不作为可靠恢复保证；后续修复以该文的证据和边界为准。
+
 ## 背景
 
 Chat-Codex 已把微信参考版本更新到 `@tencent-weixin/openclaw-weixin@2.4.4`。该版本进一步明确了微信回复链路里的几个关键字段和生命周期消息：

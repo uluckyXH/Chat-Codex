@@ -3,6 +3,7 @@ import type { CodexRunPolicy, CodexRunPolicyStatus } from "./codex-cli.js";
 import type { CodexCwdDiagnostic } from "./cwd-diagnostic.js";
 import type { CodexPromptInput } from "./input.js";
 import type { CodexTransportDiagnostic } from "./transport-diagnostic.js";
+import type { CodexProtocolStatus } from "./app-server/compatibility.js";
 
 export type { CodexRunPolicy, CodexRunPolicyStatus } from "./codex-cli.js";
 export type { CodexCwdDiagnostic, CodexCwdDiagnosticSource, CodexCwdInspection, CodexCwdInspectionState } from "./cwd-diagnostic.js";
@@ -24,6 +25,10 @@ export interface CodexRunOptions {
 export const CODEX_GOAL_STATUSES = ["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"] as const;
 
 export type CodexGoalStatus = typeof CODEX_GOAL_STATUSES[number];
+
+export interface CodexGoalMutationOptions {
+  origin: "user" | "automatic";
+}
 
 export interface CodexGoal {
   threadId: string;
@@ -83,6 +88,9 @@ export interface CodexModelOption {
   upgrade?: string | null;
   upgradeInfo?: unknown;
   availabilityNux?: unknown;
+  modelSpecialty?: string | null;
+  multiAgentVersion?: string | null;
+  availableAccessPrograms?: Record<string, unknown> | null;
   hidden: boolean;
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: CodexReasoningEffort;
@@ -97,6 +105,25 @@ export interface CodexModelListOptions {
   includeHidden?: boolean;
 }
 
+export interface CodexSessionListStatus {
+  source: "app-server" | "local";
+  pages: number;
+  truncated: boolean;
+  notice?: string;
+}
+
+/** Middleware capabilities; handshake alone does not verify server features. */
+export interface CodexAdapterCapabilities {
+  mode: "app-server" | "exec";
+  interactiveApprovals: boolean;
+  userInput: boolean;
+  goals: boolean;
+  steering: boolean;
+  modelList: boolean;
+  messagePhases: boolean;
+  asyncQuestions: boolean;
+}
+
 export interface CodexModelPolicy {
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
@@ -105,6 +132,7 @@ export interface CodexModelPolicy {
 
 export type CodexSessionBaseStatus =
   | { type: "idle" }
+  | { type: "interrupted" }
   | { type: "running"; task?: string; turnId?: string; startedAt?: string }
   | { type: "waiting_approval"; detail?: string; startedAt?: string }
   | { type: "waiting_input"; detail?: string; startedAt?: string }
@@ -112,10 +140,21 @@ export type CodexSessionBaseStatus =
   | { type: "unknown"; detail?: string };
 
 export type CodexSessionStatus = CodexSessionBaseStatus & {
+  goal?: CodexGoal | null;
+  effectiveSettings?: CodexEffectiveSettings;
   context?: CodexSessionContextUsage;
   model?: CodexSessionModelInfo;
   cwdDiagnostic?: CodexCwdDiagnostic;
 };
+
+export interface CodexEffectiveSettings {
+  runtimeWorkspaceRoots?: string[];
+  approvalPolicy?: unknown;
+  approvalsReviewer?: string | null;
+  sandboxPolicy?: Record<string, unknown>;
+  activePermissionProfile?: { id: string; extends: string | null } | null;
+  collaborationMode?: Record<string, unknown> | null;
+}
 
 export type CodexNotificationKind =
   | "security"
@@ -157,6 +196,8 @@ export interface CodexUserInputQuestion {
 }
 
 export interface CodexUserInputRequest {
+  /** Missing on older servers means blocking. */
+  isBlocking?: boolean;
   adapterRequestId: string;
   sessionId: string;
   turnId: string;
@@ -180,6 +221,16 @@ export interface CodexToolProgress {
   status?: "completed" | "failed" | "blocked" | "unknown";
 }
 
+export type CodexMessagePhase = "commentary" | "partial_answer" | "final_answer";
+
+export interface CodexAssistantMessage {
+  itemId?: string;
+  text: string;
+  phase?: CodexMessagePhase;
+  delivery?: "async";
+  questions?: Array<{ title: string; options: string[] }>;
+}
+
 export type CodexEvent =
   | { type: "turn.started"; sessionId: string; turnId: string; startedAt?: string }
   | { type: "context.compaction"; sessionId: string; turnId: string; phase: "started" | "completed" }
@@ -188,14 +239,24 @@ export type CodexEvent =
   | { type: "tool.progress"; sessionId: string; turnId: string; progress: CodexToolProgress }
   | { type: "codex.notification"; sessionId: string; turnId: string; notification: CodexNotification }
   | { type: "assistant.plan"; sessionId: string; turnId: string; text: string }
-  | { type: "assistant.delta"; sessionId: string; turnId: string; text: string }
+  | { type: "assistant.delta"; sessionId: string; turnId: string; text: string; itemId?: string; snapshot?: string }
   | { type: "assistant.completed"; sessionId: string; turnId: string; text: string }
+  | { type: "assistant.message"; sessionId: string; turnId: string; message: CodexAssistantMessage }
   | { type: "approval.requested"; sessionId: string; turnId: string; approval: ApprovalRequest }
   | { type: "approval.resolved"; sessionId: string; turnId: string; adapterApprovalId: string }
   | { type: "input.requested"; sessionId: string; turnId: string; request: CodexUserInputRequest }
   | { type: "input.resolved"; sessionId: string; turnId: string; adapterRequestId: string }
   | { type: "turn.completed"; sessionId: string; turnId: string }
-  | { type: "turn.failed"; sessionId: string; turnId: string; error: string };
+  | { type: "turn.interrupted"; sessionId: string; turnId: string }
+  | { type: "turn.retrying"; sessionId: string; turnId: string; error: string; errorDetails?: CodexTurnError }
+  | { type: "turn.failed"; sessionId: string; turnId: string; error: string; errorDetails?: CodexTurnError };
+
+export interface CodexTurnError {
+  message: string;
+  codexErrorInfo?: unknown;
+  additionalDetails?: string;
+  misalignment?: unknown;
+}
 
 export type CodexBackgroundEventHandler = (event: CodexEvent) => void | Promise<void>;
 
@@ -262,6 +323,9 @@ export interface CodexCompactResult {
 }
 
 export interface CodexAdapter {
+  getProtocolStatus?(): CodexProtocolStatus;
+  getSessionListStatus?(): CodexSessionListStatus | undefined;
+  getCapabilities?(): CodexAdapterCapabilities;
   stop?(): Promise<void>;
   onBackgroundEvent?(handler: CodexBackgroundEventHandler): () => void;
   startSession(input: StartSessionInput): Promise<CodexSession>;
@@ -288,8 +352,8 @@ export interface CodexAdapter {
   getCollaborationMode?(sessionId?: string): CodexCollaborationMode;
   setCollaborationMode?(mode: CodexCollaborationMode, sessionId?: string): void;
   getGoal?(sessionId: string): Promise<CodexGoal | null>;
-  setGoal?(sessionId: string, objective: string): Promise<CodexGoal>;
-  setGoalStatus?(sessionId: string, status: CodexGoalStatus): Promise<CodexGoal>;
-  clearGoal?(sessionId: string): Promise<boolean>;
+  setGoal?(sessionId: string, objective: string, options?: CodexGoalMutationOptions): Promise<CodexGoal>;
+  setGoalStatus?(sessionId: string, status: CodexGoalStatus, options?: CodexGoalMutationOptions): Promise<CodexGoal>;
+  clearGoal?(sessionId: string, options?: CodexGoalMutationOptions): Promise<boolean>;
   compactSession?(sessionId: string): Promise<CodexCompactResult>;
 }

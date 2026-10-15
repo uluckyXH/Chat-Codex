@@ -2,6 +2,7 @@ import type { FeishuGroupMessageRaw } from "../channels/feishu/group/group-types
 import { BridgeGroupController } from "./group-controller.js";
 import { groupSenderRole } from "../group-access/policy.js";
 import { withCodexInputText } from "../codex/input.js";
+import { textWithQuotedMessage } from "./quoted-message.js";
 import { ApprovalManager } from "../approvals/approval-manager.js";
 import type { ApprovalDecision } from "../approvals/types.js";
 import type { CodexRunPolicyStatus } from "../codex/codex-cli.js";
@@ -547,7 +548,7 @@ export class Bridge {
       return;
     }
     if (this.sessionFlow.shouldAskBeforeBindingSession(message)) {
-      await this.routeQueue.enqueuePrompt(message, target, text);
+      await this.routeQueue.enqueuePrompt(message, target, textWithQuotedMessage(message, text));
       return;
     }
     const inputAttachments = [...this.pendingMedia.consume(message.routeKey), ...attachments.usable];
@@ -556,9 +557,10 @@ export class Bridge {
     if (rejectedAttachments.length > 0) {
       await this.delivery.sendText(target, inboundMediaTurnOverflowText(rejectedAttachments.length));
     }
+    const promptText = textWithQuotedMessage(message, text);
     const rawInput = acceptedAttachments.length > 0
-      ? codexInputFromTextAndAttachments(text, acceptedAttachments)
-      : text;
+      ? codexInputFromTextAndAttachments(promptText, acceptedAttachments)
+      : promptText;
     const groupPrefixMode = message.conversation.kind === "group" && await this.isRouteExecutionBusyWithoutCompact(message.routeKey)
       ? "supplement"
       : "say";

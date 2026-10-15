@@ -1,5 +1,7 @@
 # 微信 `sendmessage ret=-2` 与 `context_token` 问题说明
 
+> 2026-10-15 更新：最新源码对照、约 5 分钟任务故障记录和验证见[本轮排查与方案](2026-10-15-weixin-prepare-failed-analysis.zh-CN.md)。此前“去掉 token 即可稳定直投”的推断缺乏依据；当前 `/fff` 也不会自动更新执行中任务的发送 target 或补发失败 final。下文历史现象不代表本次故障已确定根因。
+
 本文档记录真实微信通道里出现的一个高频问题：Codex 长任务期间，微信 `sendmessage` 偶发或连续返回 `ret=-2 errcode=0`；但用户发送 `/help`、`/status` 等短命令时，又能正常收到回复。
 
 结论先说清楚：这通常不是微信登录整体失效，也不是 Codex 本身不工作。更可能是长任务期间复用旧 `context_token`、连续发送进度消息、消息过长或微信侧临时拒收共同导致的发送失败。
@@ -27,15 +29,9 @@
 
 ## 专业版本
 
-`context_token` 是微信 `getupdates` 对单条入站消息下发的上下文引用。发送回复时，客户端可以把它放入 `sendmessage` 请求体的 `msg.context_token` 字段，以便微信侧把机器人回复关联到对应会话上下文。
+`context_token` 是微信 `getupdates` 对入站消息下发的上下文。官方插件源码要求发送回复时原样带回 `msg.context_token`。它与账号登录用的 `bot_token` 不同，但不能据此推断微信发送不校验它。
 
-但它不是微信消息发送的授权凭证。真实发送更核心的条件是：
-
-```text
-bot_token + to_user_id + sendmessage
-```
-
-OpenClaw 的 cron 主动投递也支持在没有新入站消息的情况下向微信用户发消息，这说明 `context_token` 更像“回复上下文锚点”，不是“能不能发消息”的硬门槛。
+OpenClaw 的主动出站入口也会读取已缓存的 context token。“没有新入站”不等于“没有 token”，更不能据此承诺无 token 发送一定可用。上游用户报告中，无 token 发送同样可能得到 `prepare failed`。
 
 当前没有发现可用的主动刷新 `context_token` API。中间件只能在收到新的微信入站消息时拿到新的 `context_token`。
 
@@ -52,7 +48,7 @@ OpenClaw 的 cron 主动投递也支持在没有新入站消息的情况下向�
 - 长文本或多段连续出站是高风险因素。
 - 微信服务端临时波动或限流也可能参与其中。
 
-因此正确策略不是“刷新 context token”，因为目前没有刷新接口；正确策略是把 `context_token` 从发送依赖降级为观测和兼容字段，并降低出站消息压力。
+应在新入站后及时更新同账号、同会话的上下文，并在真正发送时使用最新已知值；没有新上下文时不能自行续期。配合低噪声、长文本分段、有限重试及失败结果保存，而不是把 token 降级为纯观测字段。
 
 ## 当前投递策略
 
@@ -63,7 +59,7 @@ OpenClaw 的 cron 主动投递也支持在没有新入站消息的情况下向�
 - 接收微信消息时，仍从原始消息里提取并保留 `context_token`，方便日志观察、调试和后续回退。
 - 发送文本消息时，会在 `sendmessage` 请求体里携带当前入站消息的 `context_token`。
 - 发送图片和文件媒体时，同样携带当前入站消息的 `context_token`。
-- 审批、final reply、错误和用户主动命令回复会尽量携带当前上下文；如果带 token 投递触发 `ret=-2`，会去掉 `context_token` fallback 一次。
+- 审批、final reply、错误和用户主动命令回复携带 target 中的上下文；如果带 token 投递持续触发 `ret=-2`，会进入一轮去 token fallback。默认两轮各最多 3 次请求，这一策略的可靠性尚未证实，本轮方案建议调整。
 - 微信渠道通过 `ChannelDeliveryPolicy` 声明不投递 task-start，但允许 `/progress silent|brief`；默认 `silent` 不发送普通文本进度和结构化工具生命周期。真实微信连续普通文本进度投递仍可能出现 `ret=-2`，因此不开放 `/progress realtime/detailed/tools`。
 - `/fff` 会静默处理，不回复、不入队、不转发给 Codex。
 - typing 仍可单独使用 `context_token` 请求 `typing_ticket`；typing 失败只记录告警，不影响 `sendmessage`。
@@ -76,9 +72,9 @@ OpenClaw 的 cron 主动投递也支持在没有新入站消息的情况下向�
 - 默认发送间隔为 `1200ms`。
 - `sendmessage` 有超时和退避重试。
 - `ret=-1`、`ret=-2` 被视为可重试临时错误。
-- 非微信渠道的 progress 发送失败后，会对当前 route 进入短暂冷却，避免持续刷失败请求；当前主干微信渠道不发送 progress。微信 2.4.4 实验开启进度后，也必须保留退避和低噪声默认值。
-- 兼容逻辑仍保留：如果未来某条带 `context_token` 的 `sendmessage` 在正常重试后仍因 `ret=-2` 失败，会再尝试一次不带 `context_token` 的发送。
-- app-server commentary/progress 分片阈值已提高，非微信渠道可减少一句话被拆成多条进度消息；微信渠道当前通过 delivery policy 禁用 progress 投递。
+- progress 发送失败后，对当前 route 进入短暂冷却，避免持续刷失败请求；当前微信允许 `silent/brief`，默认 `silent`，而非所有模式下一律禁止 progress。
+- 兼容逻辑仍保留：带 `context_token` 的发送在正常重试后仍因 `ret=-2` 失败，会进入去 token 的 fallback 重试轮；这不代表 fallback 可绕过服务端校验。
+- app-server commentary/progress 分片阈值已提高，但它不是最终文本的长度保护；当前微信最终正文仍未经分段。
 
 这些策略的目标是：不要因为微信某次临时拒收就让整个 Codex turn 崩掉，也不要继续用同一个高风险上下文疯狂重试。Codex 微信桥更重视“稳定投递到用户”，而不是微信 UI 上严格挂靠某条入站消息。
 
@@ -89,7 +85,7 @@ OpenClaw 的 cron 主动投递也支持在没有新入站消息的情况下向�
 - 不发送 task-start。
 - 不发送 progress。
 - 保留 final reply、error、approval、stop、队列提示、媒体发送结果和用户主动命令回复。
-- 用户可以发送 `/fff` 主动制造一次微信入站刷新；该命令不回复、不入队、不转发给 Codex。
+- 用户可以发送 `/fff` 产生一次微信入站；该命令不回复、不入队、不转发给 Codex。现状测试表明，它不会自动改变已运行任务持有的旧 token，也不会自动补发先前失败的结果。
 
 ## 排查 checklist
 
@@ -147,6 +143,6 @@ Codex 长任务输出 -> 中间件投递策略 -> 微信上下文发送限制
 
 - 能少发就少发。
 - 能合并就合并。
-- 旧上下文不可靠时就不要强依赖。
+- 发送时使用最新的同账号、同会话上下文；上下文不可用时保留结果并等待恢复。
 - 关键消息优先送达。
 - 失败要可观测，但不要让整个任务崩溃。

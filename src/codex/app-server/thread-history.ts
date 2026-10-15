@@ -1,4 +1,5 @@
 import { arrayValue, objectValue, stringValue } from "./value-parsers.js";
+import { isFinalAssistantItem } from "./assistant-messages.js";
 
 const TURN_PAGE_LIMIT = 4;
 const MAX_TURN_PAGES = 2;
@@ -79,7 +80,7 @@ async function readLastAssistantMessageFromTurnItems(
 function lastAssistantMessageFromEntries(entries: unknown[]): string | undefined {
   for (const entry of entries) {
     const item = objectValue(objectValue(entry).item);
-    if (stringValue(item.type) !== "agentMessage" || stringValue(item.phase) === "commentary") continue;
+    if (!isFinalAssistantItem(item)) continue;
     const text = stringValue(item.text)?.trim();
     if (text) return text;
   }

@@ -62,8 +62,8 @@ test("app-server approval mapper preserves request and decision compatibility", 
   assert.equal(approvalKindForMethod("unknown"), undefined);
   assert.deepEqual(responseForApprovalDecision("item/commandExecution/requestApproval", {}, "approve-session"), { decision: "acceptForSession" });
   assert.deepEqual(responseForApprovalDecision("execCommandApproval", {}, "deny"), { decision: "denied" });
-  assert.deepEqual(responseForApprovalDecision("item/permissions/requestApproval", { permissions: { network: true, fileSystem: "write", ignored: null } }, "approve"), {
-    permissions: { network: true, fileSystem: "write" },
+  assert.deepEqual(responseForApprovalDecision("item/permissions/requestApproval", { permissions: { network: { enabled: true }, fileSystem: { write: ["/repo"] }, ignored: null } }, "approve"), {
+    permissions: { network: { enabled: true }, fileSystem: { write: ["/repo"] } },
     scope: "turn",
   });
   assert.deepEqual(approvalFromServerRequest("item/commandExecution/requestApproval", "approval-1", {
@@ -377,6 +377,7 @@ test("app-server model and token mappers preserve response parsing", () => {
     model: "gpt",
     provider: "openai",
     reasoningEffort: "high",
+    serviceTier: null,
   });
   assert.deepEqual(modelInfoWithPolicy({ model: "base", provider: "openai" }, { model: "next", reasoningEffort: "medium", serviceTier: "default" }), {
     model: "next",

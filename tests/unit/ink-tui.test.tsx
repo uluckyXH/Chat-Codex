@@ -558,7 +558,7 @@ test("Runtime TUI renders startup summary and transcript logs", async () => {
     "飞书 => 私聊:oc_abc",
     "飞书 -- 私聊:oc_abc | 本地进度",
   ]);
-  assert.deepEqual(store.snapshot().map((entry) => entry.message), ["你好", "群消息", "收到", "正在分析。"]);
+  assert.deepEqual(store.snapshot().map((entry) => entry.message), ["消息 ID: message-1\n你好", "消息 ID: message-2\n群消息", "收到", "正在分析。"]);
 
   const view = render(<RuntimeLogView summary={{
     title: `${expectedChatCodexTitle()} 运行中`,
@@ -615,6 +615,27 @@ test("Runtime TUI renders commentary transcript logs", async () => {
   assert.match(cleanFrame(view), /本地旁白/);
   assert.match(cleanFrame(view), /我先说明方案。/);
 
+  view.unmount();
+});
+
+test("Runtime TUI renders quote identifiers and cache misses beside the current message", async () => {
+  const store = new RuntimeLogStore();
+  new RuntimeTuiTranscriptSink(store).inbound({
+    id: "18446744073709551614", channelId: "weixin", routeKey: "weixin:bot:direct:user",
+    sender: { id: "user" }, conversation: { id: "user", kind: "direct" }, timestamp: "now",
+    quotedMessage: { messageId: "18446744073709551615", text: "private-history" },
+    quoteDiagnostics: { source: "unavailable", cache: "miss", selection: "none", media: "none" },
+  }, "解释这个");
+  const view = render(<RuntimeLogView summary={{
+    title: "引用诊断", channels: ["weixin"], cwd: "/repo", policy: { permissionMode: "full" }, routePolicy: "自动绑定",
+  }} store={store} />);
+  await waitForInk();
+  const frame = cleanFrame(view);
+  assert.match(frame, /18446744073709551614/);
+  assert.match(frame, /18446744073709551615/);
+  assert.match(frame, /缓存未命中/);
+  assert.match(frame, /解释这个/);
+  assert.doesNotMatch(frame, /private-history/);
   view.unmount();
 });
 

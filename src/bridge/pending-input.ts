@@ -4,6 +4,7 @@ import type {
   CodexUserInputRequest,
   CodexUserInputResponse,
 } from "../codex/types.js";
+import { randomBytes } from "node:crypto";
 import type { ChannelMessage, ChannelTarget } from "../protocol/channel.js";
 import type { BridgeDelivery } from "./delivery.js";
 
@@ -28,6 +29,7 @@ export interface HandlePendingInputMessageOptions {
 }
 
 interface PendingInputState {
+  selector?: string;
   routeKey: string;
   target: ChannelTarget;
   request: CodexUserInputRequest;
@@ -49,6 +51,7 @@ interface QueuedPendingInput {
 }
 
 interface AnswerCommand {
+  selector?: string;
   value: number;
   note: string;
   invalidMulti: boolean;
@@ -72,6 +75,9 @@ export class BridgePendingInputManager {
   private readonly timeoutMs: number;
   private readonly pendingByRoute = new Map<string, PendingInputState>();
   private readonly queuedByRoute = new Map<string, QueuedPendingInput[]>();
+  private readonly optionalByRoute = new Map<string, Map<string, PendingInputState>>();
+  private readonly selectorScope = randomBytes(8).toString("base64url").toLowerCase();
+  private selectorSequence = 0;
   private readonly recentlyResolvedByRoute = new Map<string, RecentlyResolvedInput>();
 
   constructor(options: BridgePendingInputOptions) {
@@ -89,7 +95,10 @@ export class BridgePendingInputManager {
       await this.delivery.sendText(input.target, "当前 Codex 接入不支持这类中途选择，本次选择无法处理。");
       return;
     }
-    const existing = this.pendingByRoute.get(input.routeKey);
+    if ([this.pendingByRoute.get(input.routeKey), ...(this.optionalByRoute.get(input.routeKey)?.values() ?? [])]
+      .some((state) => state?.request.adapterRequestId === input.request.adapterRequestId)
+      || this.queuedByRoute.get(input.routeKey)?.some((entry) => entry.request.adapterRequestId === input.request.adapterRequestId)) return;
+    const existing = input.request.isBlocking === false ? undefined : this.pendingByRoute.get(input.routeKey);
     if (existing) {
       if (existing.request.sessionId === input.request.sessionId && existing.request.turnId === input.request.turnId) {
         const queued = this.queuedByRoute.get(input.routeKey) ?? [];
@@ -123,6 +132,7 @@ export class BridgePendingInputManager {
       return;
     }
     const state: PendingInputState = {
+      ...(input.request.isBlocking === false ? { selector: `${this.selectorScope}-${++this.selectorSequence}` } : {}),
       routeKey: input.routeKey,
       target: input.target,
       request: input.request,
@@ -131,17 +141,25 @@ export class BridgePendingInputManager {
       expiresAt: Date.now() + this.timeoutMs,
       resolving: false,
     };
-    state.timer = setTimeout(() => {
-      void this.timeoutRoute(input.routeKey, input.request.adapterRequestId);
-    }, this.timeoutMs);
-    state.timer.unref?.();
-    this.pendingByRoute.set(input.routeKey, state);
+    if (state.selector !== undefined) {
+      const optional = this.optionalByRoute.get(input.routeKey) ?? new Map<string, PendingInputState>();
+      optional.set(state.selector, state);
+      this.optionalByRoute.set(input.routeKey, optional);
+    } else {
+      state.timer = setTimeout(() => {
+        void this.timeoutRoute(input.routeKey, input.request.adapterRequestId);
+      }, this.timeoutMs);
+      state.timer.unref?.();
+      this.pendingByRoute.set(input.routeKey, state);
+    }
     await this.delivery.sendText(input.target, formatQuestionPrompt(state));
   }
 
   async handleMessage(input: HandlePendingInputMessageOptions): Promise<boolean> {
     const command = parseAnswerCommand(input.commandName, input.rawText);
-    const pending = this.pendingByRoute.get(input.message.routeKey);
+    const pending = command?.selector !== undefined
+      ? this.optionalByRoute.get(input.message.routeKey)?.get(command.selector)
+      : this.pendingByRoute.get(input.message.routeKey);
     if (!pending) {
       if (command) {
         await this.delivery.sendText(input.target, this.recentlyResolved(input.message.routeKey)
@@ -170,10 +188,17 @@ export class BridgePendingInputManager {
   }
 
   async handleResolved(routeKey: string, requestId: string): Promise<void> {
+    const optional = [...(this.optionalByRoute.get(routeKey)?.values() ?? [])].find((state) => state.request.adapterRequestId === requestId);
+    if (optional) {
+      this.clearPending(optional);
+      this.markRecentlyResolved(routeKey);
+      if (optional.resolving) await this.delivery.sendText(optional.target, "已提交 Codex 输入。");
+      return;
+    }
     const pending = this.pendingByRoute.get(routeKey);
     if (pending?.request.adapterRequestId === requestId) {
       this.clearPending(pending);
-      await this.delivery.sendText(pending.target, "Codex 已在 app-server 侧解决该输入请求。");
+      await this.delivery.sendText(pending.target, pending.resolving ? "已提交 Codex 输入。" : "Codex 已在 app-server 侧解决该输入请求。");
       await this.startNextQueued(routeKey);
       return;
     }
@@ -189,6 +214,8 @@ export class BridgePendingInputManager {
 
   clearRoute(routeKey: string): number {
     let cleared = 0;
+    cleared += this.optionalByRoute.get(routeKey)?.size ?? 0;
+    this.optionalByRoute.delete(routeKey);
     const pending = this.pendingByRoute.get(routeKey);
     if (pending) {
       this.clearPending(pending);
@@ -205,6 +232,12 @@ export class BridgePendingInputManager {
 
   clearTurn(routeKey: string, sessionId: string, turnId: string): number {
     let cleared = 0;
+    for (const optional of this.optionalByRoute.get(routeKey)?.values() ?? []) {
+      if (optional.request.sessionId === sessionId && optional.request.turnId === turnId) {
+        this.clearPending(optional);
+        cleared += 1;
+      }
+    }
     const pending = this.pendingByRoute.get(routeKey);
     if (pending && pending.request.sessionId === sessionId && pending.request.turnId === turnId) {
       this.clearPending(pending);
@@ -227,6 +260,7 @@ export class BridgePendingInputManager {
       if (pending.timer) clearTimeout(pending.timer);
     }
     this.pendingByRoute.clear();
+    this.optionalByRoute.clear();
     this.queuedByRoute.clear();
     this.recentlyResolvedByRoute.clear();
   }
@@ -282,11 +316,19 @@ export class BridgePendingInputManager {
     pending.resolving = true;
     const routeKey = pending.routeKey;
     const response = responseWithEmptyAnswers(pending.request, pending.answers);
-    await this.codex.resolveUserInput?.(pending.request.adapterRequestId, response);
+    try {
+      await this.codex.resolveUserInput?.(pending.request.adapterRequestId, response);
+    } catch (error) {
+      pending.resolving = false;
+      throw error;
+    }
+    const stillPending = pending.selector === undefined ? this.pendingByRoute.get(routeKey) === pending
+      : this.optionalByRoute.get(routeKey)?.get(pending.selector) === pending;
+    if (!stillPending) return;
     this.clearPending(pending);
     this.markRecentlyResolved(routeKey);
     await this.delivery.sendText(pending.target, "已提交 Codex 输入。");
-    await this.startNextQueued(routeKey);
+    if (pending.selector === undefined) await this.startNextQueued(routeKey);
   }
 
   private async timeoutRoute(routeKey: string, requestId: string): Promise<void> {
@@ -325,7 +367,13 @@ export class BridgePendingInputManager {
 
   private clearPending(pending: PendingInputState): void {
     if (pending.timer) clearTimeout(pending.timer);
-    this.pendingByRoute.delete(pending.routeKey);
+    if (pending.selector !== undefined) {
+      const optional = this.optionalByRoute.get(pending.routeKey);
+      optional?.delete(pending.selector);
+      if (!optional?.size) this.optionalByRoute.delete(pending.routeKey);
+    } else if (this.pendingByRoute.get(pending.routeKey) === pending) {
+      this.pendingByRoute.delete(pending.routeKey);
+    }
   }
 
   private markRecentlyResolved(routeKey: string): void {
@@ -343,19 +391,20 @@ export class BridgePendingInputManager {
 
 function parseAnswerCommand(commandName: string | undefined, rawText: string): AnswerCommand | undefined {
   const text = rawText.trim();
-  const match = text.match(/^\/a(\d+)(.*)$/i);
+  const match = text.match(/^\/a(\d+)(?:@q([a-z0-9_-]+))?(?:\s+([\s\S]*))?$/i);
   if (!match) {
-    if (commandName && /^a\d/i.test(commandName)) return { value: -1, note: "", invalidMulti: true };
+    if (/^\/a\d/i.test(text) || (commandName && /^a\d/i.test(commandName))) return { value: -1, note: "", invalidMulti: true };
     return undefined;
   }
   const value = Number.parseInt(match[1] ?? "", 10);
-  const trailing = (match[2] ?? "").trim();
+  const trailing = (match[3] ?? "").trim();
   const invalidMulti = !Number.isInteger(value)
     || value < 0
     || trailing.startsWith(",")
     || trailing.startsWith("，")
     || /^\d+(?:\s|,|，|$)/.test(trailing);
   return {
+    ...(match[2] ? { selector: match[2].toLowerCase() } : {}),
     value,
     note: trailing,
     invalidMulti,
@@ -400,7 +449,7 @@ function formatQuestionPrompt(pending: PendingInputState): string {
   const questionCount = pending.request.questions.length;
   const choices = answerChoices(question);
   const lines = [
-    "Codex 暂停了当前任务，需要你确认后继续。",
+    pending.selector === undefined ? "Codex 暂停了当前任务，需要你确认后继续。" : `Codex 有一个可稍后回答的问题 Q${pending.selector}，任务会继续执行。`,
     "",
   ];
   if (pending.target.conversation.kind === "group") {
@@ -434,10 +483,11 @@ function formatQuestionPrompt(pending: PendingInputState): string {
     "/a0 跳过这个问题",
     "不会默认选择推荐项，Codex 会自己决定下一步。",
     "",
-    `${formatTimeout(pending.expiresAt - Date.now())}内未回复会按 /a0 处理。`,
+    pending.selector === undefined ? `${formatTimeout(pending.expiresAt - Date.now())}内未回复会按 /a0 处理。` : "普通消息仍可继续任务；本问题不会自动代选，问题关闭后回复失效。",
     "要停止整个任务，请回复 /stop。",
   );
-  return lines.join("\n");
+  const text = lines.join("\n");
+  return pending.selector === undefined ? text : text.replace(/\/a(\d+)/g, `/a$1@Q${pending.selector}`);
 }
 
 function formatTimeout(ms: number): string {

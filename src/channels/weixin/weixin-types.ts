@@ -1,3 +1,5 @@
+export const WEIXIN_PROTOCOL_VERSION = "2.4.10";
+
 export interface WeixinBaseInfo {
   channel_version?: string;
   bot_agent?: string;
@@ -59,6 +61,15 @@ export interface WeixinFileItem {
   len?: string;
 }
 
+export interface WeixinVoiceItem {
+  media?: WeixinCdnMedia;
+  encode_type?: number;
+  bits_per_sample?: number;
+  sample_rate?: number;
+  playtime?: number;
+  text?: string;
+}
+
 export interface WeixinVideoItem {
   media?: WeixinCdnMedia;
   video_size?: number;
@@ -81,6 +92,21 @@ export interface WeixinToolCallResultItem {
   status?: "completed" | "failed" | "blocked" | "unknown";
 }
 
+export interface WeixinPartialText {
+  start: string;
+  end: string;
+  startindex: number;
+  endindex: number;
+  quotemd5: string;
+}
+
+export interface WeixinRefMessage {
+  message_item?: WeixinMessageItem;
+  title?: string;
+  svr_id?: string;
+  partial_text?: WeixinPartialText;
+}
+
 export interface WeixinMessageItem {
   type?: number;
   msg_id?: string;
@@ -89,16 +115,18 @@ export interface WeixinMessageItem {
   is_completed?: boolean;
   text_item?: WeixinTextItem;
   image_item?: WeixinImageItem;
-  voice_item?: { text?: string };
+  voice_item?: WeixinVoiceItem;
   file_item?: WeixinFileItem;
   video_item?: WeixinVideoItem;
   tool_call_start_item?: WeixinToolCallStartItem;
   tool_call_result_item?: WeixinToolCallResultItem;
+  ref_msg?: WeixinRefMessage;
 }
 
 export interface WeixinMessage {
   seq?: number;
-  message_id?: number;
+  /** API decoding always returns a string; safe numbers remain accepted for legacy callers. */
+  message_id?: string | number;
   from_user_id?: string;
   to_user_id?: string;
   client_id?: string;
@@ -146,6 +174,13 @@ export interface WeixinQrStatusResponse {
 
 export interface WeixinSendMessageRequest {
   msg?: WeixinMessage;
+}
+
+export interface WeixinSendMessageResponse {
+  message_id?: string;
+  ret?: number;
+  errcode?: number;
+  errmsg?: string;
 }
 
 export interface WeixinGetConfigRequest {

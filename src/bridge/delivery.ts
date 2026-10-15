@@ -56,8 +56,8 @@ export class BridgeDelivery {
   }
 
   async deliverText(target: ChannelTarget, text: string): Promise<void> {
-    await this.channels.sendText(target, text);
-    this.transcript?.outbound(target, text);
+    const result = await this.channels.sendText(target, text);
+    this.transcript?.outbound(target, text, result);
   }
 
   async sendApprovalUntilDelivered(routeKey: string, target: ChannelTarget, pending: PendingApproval): Promise<void> {
@@ -74,7 +74,7 @@ export class BridgeDelivery {
         if (cardCapable) {
           const cardResult = await this.channels.sendApprovalRequest?.(target, approvalRequest);
           if (cardResult) {
-            this.transcript?.outbound(target, text);
+            this.transcript?.outbound(target, text, cardResult);
             return;
           }
         }
@@ -135,11 +135,11 @@ export class BridgeDelivery {
       preview: deliveryTextPreview(text),
     };
     try {
-      await this.channels.sendText(target, text);
+      const result = await this.channels.sendText(target, text);
       if (this.transcript?.outboundProgress) {
-        this.transcript.outboundProgress(target, text);
+        this.transcript.outboundProgress(target, text, result);
       } else {
-        this.transcript?.outbound(target, text);
+        this.transcript?.outbound(target, text, result);
       }
       this.textProgressSendSuppressedUntil.delete(routeKey);
       this.textProgressSendSuppressionReason.delete(routeKey);
@@ -164,11 +164,11 @@ export class BridgeDelivery {
       preview: deliveryTextPreview(text),
     };
     try {
-      await this.channels.sendText(target, text);
+      const result = await this.channels.sendText(target, text);
       if (this.transcript?.outboundProgress) {
-        this.transcript.outboundProgress(target, text);
+        this.transcript.outboundProgress(target, text, result);
       } else {
-        this.transcript?.outbound(target, text);
+        this.transcript?.outbound(target, text, result);
       }
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
@@ -201,13 +201,13 @@ export class BridgeDelivery {
       preview: deliveryTextPreview(text),
     };
     try {
-      await this.channels.sendText(target, text);
+      const result = await this.channels.sendText(target, text);
       if (this.transcript?.outboundCommentary) {
-        this.transcript.outboundCommentary(target, text);
+        this.transcript.outboundCommentary(target, text, result);
       } else if (this.transcript?.outboundProgress) {
-        this.transcript.outboundProgress(target, text);
+        this.transcript.outboundProgress(target, text, result);
       } else {
-        this.transcript?.outbound(target, text);
+        this.transcript?.outbound(target, text, result);
       }
       this.commentarySendSuppressedUntil.delete(routeKey);
       this.commentarySendSuppressionReason.delete(routeKey);
@@ -239,13 +239,13 @@ export class BridgeDelivery {
       preview: deliveryTextPreview(text),
     };
     try {
-      await this.channels.sendText(target, text);
+      const result = await this.channels.sendText(target, text);
       if (this.transcript?.outboundCommentary) {
-        this.transcript.outboundCommentary(target, text);
+        this.transcript.outboundCommentary(target, text, result);
       } else if (this.transcript?.outboundProgress) {
-        this.transcript.outboundProgress(target, text);
+        this.transcript.outboundProgress(target, text, result);
       } else {
-        this.transcript?.outbound(target, text);
+        this.transcript?.outbound(target, text, result);
       }
       return true;
     } catch (error) {
@@ -393,7 +393,7 @@ export class BridgeDelivery {
         if (this.authorizeMedia && !this.authorizeMedia(target)) throw new Error("文件发送权限已撤销");
       } });
       this.recordMediaAudit(target, media, "allowed", result.messageId);
-      this.transcript?.outboundMedia?.(target, media);
+      this.transcript?.outboundMedia?.(target, media, result);
       return true;
     } catch (error) {
       this.recordMediaAudit(target, media, "failed");

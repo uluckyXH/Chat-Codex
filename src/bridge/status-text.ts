@@ -199,6 +199,7 @@ export class BridgeStatusText {
         scope: request.scope,
       });
     const basePage = reusableState?.page ?? 1;
+    const notice = reusableState ? reusableState.notice : this.codex.getSessionListStatus?.()?.notice;
     const requestedPage = request.action
       ? basePage + (request.action === "next" ? 1 : -1)
       : request.page ?? 1;
@@ -209,8 +210,10 @@ export class BridgeStatusText {
       pageSize: page.pageSize,
       createdAt: Date.now(),
       items,
+      notice,
     });
     return formatSessionListPage(page, {
+      notice,
       title: "Codex 会话",
       scopeLabel: request.scope === "all" ? "全部可发现" : "当前聊天",
       emptyText: request.scope === "all"
@@ -249,6 +252,8 @@ export class BridgeStatusText {
       "",
       "Capabilities:",
       JSON.stringify(capabilities, null, 2),
+      ...(this.codex.getCapabilities ? ["Codex middleware capabilities:", JSON.stringify(this.codex.getCapabilities(), null, 2)] : []),
+      ...(this.codex.getProtocolStatus ? ["Codex protocol (handshake is not feature validation):", JSON.stringify(this.codex.getProtocolStatus(), null, 2)] : []),
       "",
       `Local sessions: ${sessions.length}`,
     ].join("\n");

@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import { parseWeixinApiJson } from "./weixin-json.js";
+import { WeixinNetworkError } from "./weixin-network-error.js";
+import { WEIXIN_PROTOCOL_VERSION } from "./weixin-types.js";
+import { chatCodexVersion } from "../../runtime/package-info.js";
 import type {
   WeixinBaseInfo,
   WeixinGetConfigRequest,
@@ -9,6 +13,7 @@ import type {
   WeixinQrStartResponse,
   WeixinQrStatusResponse,
   WeixinSendMessageRequest,
+  WeixinSendMessageResponse,
   WeixinSendTypingRequest,
 } from "./weixin-types.js";
 
@@ -32,8 +37,8 @@ export class WeixinApiClient {
   constructor(options: WeixinApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://ilinkai.weixin.qq.com";
     this.fetchImpl = options.fetch ?? fetch;
-    this.channelVersion = options.channelVersion ?? "2.4.6";
-    this.botAgent = options.botAgent ?? "CodexWeChatMiddleware/0.1.0";
+    this.channelVersion = options.channelVersion ?? WEIXIN_PROTOCOL_VERSION;
+    this.botAgent = options.botAgent ?? `Chat-Codex/${chatCodexVersion()}`;
     this.appId = options.appId ?? "bot";
   }
 
@@ -61,6 +66,7 @@ export class WeixinApiClient {
 
   async getUpdates(params: {
     token: string;
+    baseUrl?: string;
     getUpdatesBuf?: string;
     timeoutMs?: number;
     signal?: AbortSignal;
@@ -68,6 +74,7 @@ export class WeixinApiClient {
     try {
       return await this.postJson<WeixinGetUpdatesResponse>({
         endpoint: "ilink/bot/getupdates",
+        baseUrl: params.baseUrl,
         token: params.token,
         timeoutMs: params.timeoutMs,
         signal: params.signal,
@@ -88,11 +95,13 @@ export class WeixinApiClient {
 
   async sendMessage(params: {
     token: string;
+    baseUrl?: string;
     body: WeixinSendMessageRequest;
     timeoutMs?: number;
-  }): Promise<void> {
-    const response = await this.postJson<WeixinApiResponse>({
+  }): Promise<WeixinSendMessageResponse> {
+    const response = await this.postJson<WeixinSendMessageResponse>({
       endpoint: "ilink/bot/sendmessage",
+      baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
       body: {
@@ -101,15 +110,18 @@ export class WeixinApiClient {
       },
     });
     assertWeixinApiSuccess(response, "sendmessage");
+    return response;
   }
 
   async getUploadUrl(params: {
     token: string;
+    baseUrl?: string;
     body: WeixinGetUploadUrlRequest;
     timeoutMs?: number;
   }): Promise<WeixinGetUploadUrlResponse> {
     const response = await this.postJson<WeixinGetUploadUrlResponse & WeixinApiResponse>({
       endpoint: "ilink/bot/getuploadurl",
+      baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
       body: {
@@ -123,11 +135,13 @@ export class WeixinApiClient {
 
   async getConfig(params: {
     token: string;
+    baseUrl?: string;
     body: WeixinGetConfigRequest;
     timeoutMs?: number;
   }): Promise<WeixinGetConfigResponse> {
     const response = await this.postJson<WeixinGetConfigResponse>({
       endpoint: "ilink/bot/getconfig",
+      baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
       body: {
@@ -141,11 +155,13 @@ export class WeixinApiClient {
 
   async sendTyping(params: {
     token: string;
+    baseUrl?: string;
     body: WeixinSendTypingRequest;
     timeoutMs?: number;
   }): Promise<void> {
     const response = await this.postJson<WeixinGetConfigResponse>({
       endpoint: "ilink/bot/sendtyping",
+      baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
       body: {
@@ -193,18 +209,20 @@ export class WeixinApiClient {
     };
   }
 
-  async notifyStart(params: { token: string; timeoutMs?: number }): Promise<void> {
+  async notifyStart(params: { token: string; baseUrl?: string; timeoutMs?: number }): Promise<void> {
     await this.postJson<unknown>({
       endpoint: "ilink/bot/msg/notifystart",
+      baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
       body: { base_info: this.baseInfo() },
     });
   }
 
-  async notifyStop(params: { token: string; timeoutMs?: number }): Promise<void> {
+  async notifyStop(params: { token: string; baseUrl?: string; timeoutMs?: number }): Promise<void> {
     await this.postJson<unknown>({
       endpoint: "ilink/bot/msg/notifystop",
+      baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
       body: { base_info: this.baseInfo() },
@@ -221,12 +239,13 @@ export class WeixinApiClient {
 
   private async postJson<T>(params: {
     endpoint: string;
+    baseUrl?: string;
     body: unknown;
     token?: string;
     timeoutMs?: number;
     signal?: AbortSignal;
   }): Promise<T> {
-    const response = await this.fetchWithTimeout(this.url(params.endpoint), {
+    const response = await this.fetchWithTimeout(this.url(params.endpoint, params.baseUrl), {
       method: "POST",
       headers: this.jsonHeaders(params.token),
       body: JSON.stringify(params.body),
@@ -248,6 +267,9 @@ export class WeixinApiClient {
         ...init,
         ...(signal ? { signal } : {}),
       });
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throw new WeixinNetworkError(error);
     } finally {
       if (timer) clearTimeout(timer);
       cleanup();
@@ -259,7 +281,7 @@ export class WeixinApiClient {
     if (!response.ok) {
       throw new Error(`${label} ${response.status}: ${text}`);
     }
-    return (text ? JSON.parse(text) : {}) as T;
+    return text ? parseWeixinApiJson<T>(text) : {} as T;
   }
 
   private url(endpoint: string, baseUrl = this.baseUrl): string {

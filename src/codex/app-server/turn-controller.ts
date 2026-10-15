@@ -1,11 +1,12 @@
 import type { CodexBackgroundEventHandler, CodexEvent, CodexProgressKind } from "../types.js";
 import {
   appServerErrorMessage,
-  messagePhaseValue,
   parseAppServerReconnectNotice,
   progressFromThreadItem,
   shouldFlushProgressDraft,
   textFromPlan,
+  turnErrorDetails,
+  itemFailed,
 } from "./notification-mapper.js";
 import { withContext } from "./session-status.js";
 import { AsyncEventQueue, createTurnQueueRecord, shouldCreateBackgroundTurn } from "./turn-store.js";
@@ -18,6 +19,7 @@ import {
 } from "./command-output-summary.js";
 import { arrayValue, isoFromSeconds, numberValue, objectValue, stringValue } from "./value-parsers.js";
 import { parseTokenUsage } from "./model-policy.js";
+import { isIntermediateMessage } from "./assistant-messages.js";
 
 export interface AppServerTurnControllerOptions {
   sessions: Map<string, AppServerSessionRecord>;
@@ -60,6 +62,10 @@ export class AppServerTurnController {
 
   get(turnId: string): TurnQueueRecord | undefined {
     return this.turnQueues.get(turnId);
+  }
+
+  isClosed(turnId: string): boolean {
+    return this.closedTurnIds.has(turnId);
   }
 
   hasActiveTurns(): boolean {
@@ -106,13 +112,13 @@ export class AppServerTurnController {
     return turn;
   }
 
-  closeTurn(turnId: string, status: "idle" | "failed", error?: string): void {
+  closeTurn(turnId: string, status: "idle" | "failed" | "interrupted", error?: string): void {
     const turn = this.turnQueues.get(turnId);
     if (!turn || turn.closed) return;
     turn.closed = true;
     const stored = this.sessions.get(turn.sessionId);
-    if (stored) {
-      stored.status = status === "failed" && error ? withContext(stored, { type: "failed", error }) : withContext(stored, { type: "idle" });
+    if (stored && (!stored.currentTurnId || stored.currentTurnId === turnId)) {
+      stored.status = status === "failed" && error ? withContext(stored, { type: "failed", error }) : withContext(stored, { type: status === "interrupted" ? "interrupted" : "idle" });
       stored.currentTurnId = undefined;
       stored.updatedAt = new Date().toISOString();
     }
@@ -150,6 +156,7 @@ export class AppServerTurnController {
     const threadId = stringValue(params.threadId);
     const turnId = stringValue(params.turnId) ?? stringValue(objectValue(params.turn).id);
     if (!turnId) return;
+    if (this.closedTurnIds.has(turnId) && notification.method !== "thread/tokenUsage/updated") return;
     let turn = this.turnQueues.get(turnId);
     const sessionId = (threadId ? this.threadToSession.get(threadId) : undefined) ?? turn?.sessionId ?? threadId;
     if (!sessionId) return;
@@ -182,13 +189,15 @@ export class AppServerTurnController {
       const delta = stringValue(params.delta);
       if (!delta) return;
       const itemId = stringValue(params.itemId);
-      const phase = itemId && turn ? turn.agentMessagePhases.get(itemId) : undefined;
-      if (turn && itemId && phase === "commentary") {
+      const message = turn?.assistantMessages.append(itemId, delta);
+      if (turn && !message) return;
+      if (message && isIntermediateMessage(message)) return;
+      if (turn && itemId && message?.phase === "commentary") {
         this.appendCommentaryDelta(turn, itemId, delta);
         return;
       }
-      if (turn) turn.finalText += delta;
-      this.pushTurnEvent(turnId, { type: "assistant.delta", sessionId, turnId, text: delta });
+      if (turn) turn.finalText = turn.assistantMessages.finalText();
+      this.pushTurnEvent(turnId, { type: "assistant.delta", sessionId, turnId, text: delta, ...(itemId && turn ? { itemId, snapshot: turn.finalText } : {}) });
       return;
     }
     if (notification.method === "item/reasoning/summaryTextDelta") {
@@ -233,8 +242,13 @@ export class AppServerTurnController {
     }
     if (notification.method === "error") {
       const error = appServerErrorMessage(params);
+      const errorDetails = turnErrorDetails(params.error, error);
       const reconnect = parseAppServerReconnectNotice(error);
-      if (reconnect) {
+      if (params.willRetry === true) {
+        this.pushTurnEvent(turnId, { type: "turn.retrying", sessionId, turnId, error, errorDetails });
+        return;
+      }
+      if (params.willRetry === undefined && reconnect) {
         const text = `Codex 连接恢复中: ${reconnect.message}`;
         if (turn) {
           this.pushProgressEvent(turn, sessionId, turnId, text, "other");
@@ -246,27 +260,31 @@ export class AppServerTurnController {
         }
         return;
       }
-      this.pushTurnEvent(turnId, { type: "turn.failed", sessionId, turnId, error });
+      this.pushTurnEvent(turnId, { type: "turn.failed", sessionId, turnId, error, errorDetails });
       this.closeTurn(turnId, "failed", error);
       return;
     }
     if (notification.method === "turn/completed") {
-      if (!turn) {
-        this.pushTurnEvent(turnId, { type: "turn.completed", sessionId, turnId });
-        return;
-      }
+      if (!turn) return;
       const turnPayload = objectValue(params.turn);
       const status = stringValue(turnPayload.status);
       if (status === "failed") {
         const error = stringValue(objectValue(turnPayload.error).message) ?? "codex turn failed";
-        this.pushTurnEvent(turnId, { type: "turn.failed", sessionId, turnId, error });
+        this.pushTurnEvent(turnId, { type: "turn.failed", sessionId, turnId, error, errorDetails: turnErrorDetails(turnPayload.error, error) });
         this.closeTurn(turnId, "failed", error);
-      } else {
+      } else if (status === "interrupted") {
+        this.pushTurnEvent(turnId, { type: "turn.interrupted", sessionId, turnId });
+        this.closeTurn(turnId, "interrupted");
+      } else if (status === "completed") {
         if (turn.finalText) {
           this.pushTurnEvent(turnId, { type: "assistant.completed", sessionId, turnId, text: turn.finalText });
         }
         this.pushTurnEvent(turnId, { type: "turn.completed", sessionId, turnId });
         this.closeTurn(turnId, "idle");
+      } else {
+        const error = `Codex 返回了无效的结束状态: ${status ?? "missing"}`;
+        this.pushTurnEvent(turnId, { type: "turn.failed", sessionId, turnId, error });
+        this.closeTurn(turnId, "failed", error);
       }
     }
   }
@@ -294,9 +312,18 @@ export class AppServerTurnController {
       return;
     }
     if (itemType === "agentMessage") {
-      const text = stringValue(item.text);
-      const phase = messagePhaseValue(item.phase);
+      const message = turn.assistantMessages.complete(item);
+      if (!message) return;
+      const previousFinal = turn.finalText;
+      turn.finalText = turn.assistantMessages.finalText();
+      if (isIntermediateMessage(message)) {
+        if (previousFinal !== turn.finalText) turn.queue.push({ type: "assistant.completed", sessionId, turnId, text: turn.finalText });
+        if (message.text || message.questions?.length) turn.queue.push({ type: "assistant.message", sessionId, turnId, message });
+        return;
+      }
+      const { text, phase } = message;
       if (phase === "commentary") {
+        if (previousFinal !== turn.finalText) turn.queue.push({ type: "assistant.completed", sessionId, turnId, text: turn.finalText });
         if (itemId && turn.emittedProgressItemIds.has(itemId)) return;
         if (text) this.pushCommentaryEvent(turn, sessionId, turnId, text, itemId);
         return;
@@ -375,9 +402,7 @@ export class AppServerTurnController {
         phase: "started",
       });
     } else if (itemType === "agentMessage") {
-      const itemId = stringValue(item.id);
-      const phase = messagePhaseValue(item.phase);
-      if (itemId && phase) turn.agentMessagePhases.set(itemId, phase);
+      turn.assistantMessages.record(item);
     } else if (itemType === "commandExecution") {
       this.handleCommandStarted(turn, item);
     }
@@ -545,9 +570,11 @@ function toolNameFromThreadItem(item: Record<string, unknown>): string | undefin
 }
 
 function toolStatusFromThreadItem(item: Record<string, unknown>): "completed" | "failed" | "blocked" | "unknown" {
+  if (itemFailed(item)) return "failed";
   const itemType = stringValue(item.type);
   const status = stringValue(item.status)?.toLowerCase();
   const exitCode = numberValue(item.exitCode);
+  if (exitCode !== undefined && exitCode !== 0) return "failed";
   if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") return "failed";
   if (status === "blocked") return "blocked";
   if (status === "completed" || status === "complete" || status === "success" || status === "succeeded") return "completed";

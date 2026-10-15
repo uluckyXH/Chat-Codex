@@ -125,6 +125,7 @@ export function userInputRequestFromServerRequest(
   if (questions.length === 0) return undefined;
   return {
     adapterRequestId: String(requestId),
+    isBlocking: params.isBlocking !== false,
     sessionId,
     turnId,
     ...(stringValue(params.itemId) ? { itemId: stringValue(params.itemId) } : {}),

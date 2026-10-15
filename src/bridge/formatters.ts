@@ -232,6 +232,7 @@ export function formatCodexStatus(status: CodexSessionStatus): string {
   const suffix = details.length > 0 ? `（${details.join("，")}）` : "";
   switch (status.type) {
     case "idle": return `空闲${suffix}`;
+    case "interrupted": return `已中断${suffix}`;
     case "running": return `运行中${suffix}`;
     case "waiting_approval": return `等待审批${suffix}`;
     case "waiting_input": return `等待输入${suffix}`;
@@ -485,9 +486,9 @@ export function formatModelOptionLine(model: CodexModelOption, index: number): s
   const serviceTiers = model.serviceTiers?.map((tier) => tier.id).filter(Boolean).join(", ");
   const tierText = serviceTiers ? `; tiers: ${serviceTiers}${model.defaultServiceTier ? ` defaultTier=\`${model.defaultServiceTier}\`` : ""}` : "";
   const inputText = model.inputModalities?.length ? `; input: ${model.inputModalities.join(",")}` : "";
-  const personalityText = model.supportsPersonality ? "; personality" : "";
+  const specialtyText = model.modelSpecialty ? `; specialty: ${model.modelSpecialty}` : "";
   const suffix = badges ? ` (${badges})` : "";
-  return `${index + 1}. \`${model.model}\`${id}${suffix} - ${model.displayName}; efforts: ${efforts}${defaultEffort}${tierText}${inputText}${personalityText}`;
+  return `${index + 1}. \`${model.model}\`${id}${suffix} - ${model.displayName}; efforts: ${efforts}${defaultEffort}${tierText}${inputText}${specialtyText}`;
 }
 
 function formatModelCandidate(model: CodexModelOption): string {

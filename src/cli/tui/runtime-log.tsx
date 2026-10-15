@@ -9,6 +9,7 @@ import {
   type TranscriptSink,
 } from "../../logging/transcript.js";
 import type { Logger } from "../../logging/logger.js";
+import { inboundContextLines, receiptContextLines, type TranscriptReceipt } from "../../logging/message-context.js";
 import type { CodexCliStatus, CodexRunPolicy } from "../../codex/codex-cli.js";
 import { formatCodexCommandSource, formatCodexPlatform } from "../../codex/codex-process.js";
 import { formatLocalClock } from "../../time/display-time.js";
@@ -79,19 +80,19 @@ export class RuntimeTuiTranscriptSink implements TranscriptSink {
   constructor(private readonly store: RuntimeLogStore) {}
 
   inbound(message: ChannelMessage, text: string): void {
-    this.store.add("inbound", `${transcriptChannelLabel(message.channelId)} <= ${transcriptInboundSubject(message)} | ${transcriptInboundDetail(message)}`, text);
+    this.store.add("inbound", `${transcriptChannelLabel(message.channelId)} <= ${transcriptInboundSubject(message)} | ${transcriptInboundDetail(message)}`, [...inboundContextLines(message), text].join("\n"));
   }
 
-  outbound(target: ChannelTarget, text: string): void {
-    this.store.add("outbound", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, text);
+  outbound(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void {
+    this.store.add("outbound", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, [...receiptContextLines(receipt), text].join("\n"));
   }
 
-  outboundProgress(target: ChannelTarget, text: string): void {
-    this.store.add("progress", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, text);
+  outboundProgress(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void {
+    this.store.add("progress", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, [...receiptContextLines(receipt), text].join("\n"));
   }
 
-  outboundCommentary(target: ChannelTarget, text: string): void {
-    this.store.add("commentary", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, text);
+  outboundCommentary(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void {
+    this.store.add("commentary", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, [...receiptContextLines(receipt), text].join("\n"));
   }
 
   observedCommentary(target: ChannelTarget, text: string): void {
@@ -110,9 +111,9 @@ export class RuntimeTuiTranscriptSink implements TranscriptSink {
     this.store.add("progress", `${transcriptChannelLabel(target.channelId)} -- ${transcriptTargetConversation(target)}`, text);
   }
 
-  outboundMedia(target: ChannelTarget, media: ChannelMedia): void {
+  outboundMedia(target: ChannelTarget, media: ChannelMedia, receipt?: TranscriptReceipt): void {
     const mediaName = media.name ?? media.path ?? media.url ?? "未命名媒体";
-    this.store.add("media", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, `${media.type}: ${mediaName}`);
+    this.store.add("media", `${transcriptChannelLabel(target.channelId)} => ${transcriptTargetConversation(target)}`, [...receiptContextLines(receipt), `${media.type}: ${mediaName}`].join("\n"));
   }
 }
 

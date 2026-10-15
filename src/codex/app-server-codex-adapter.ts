@@ -2,12 +2,14 @@ import type { ApprovalDecision } from "../approvals/types.js";
 import { normalizeApprovalDecision, unsupportedApprovalDecisionText } from "../approvals/approval-policy.js";
 import type {
   CodexAdapter,
+  CodexAdapterCapabilities,
   CodexBackgroundEventHandler,
   CodexCollaborationMode,
   CodexCompactResult,
   CodexEvent,
   CodexGoal,
   CodexGoalStatus,
+  CodexGoalMutationOptions,
   CodexModelListOptions,
   CodexModelOption,
   CodexModelPolicy,
@@ -18,6 +20,7 @@ import type {
   CodexSessionReloadResult,
   CodexSessionStatus,
   CodexSessionSummary,
+  CodexSessionListStatus,
   CodexTransportDiagnostic,
   CodexRunOptions,
   StartSessionInput,
@@ -40,14 +43,15 @@ import { goalFromResponse, goalFromSetResponse } from "./app-server/goal-api.js"
 import { appServerUserInput } from "./app-server/input-mapper.js";
 import { appServerErrorMessage, isTransientAppServerError } from "./app-server/notification-mapper.js";
 import { unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "./app-server/server-request-mapper.js";
-import { mergeSessionSummaries, sessionDetailFromThread, sessionSummaryFromThread } from "./app-server/thread-list.js";
+import { mergeSessionSummaries, sessionDetailFromThread } from "./app-server/thread-list.js";
 import { readLastAssistantMessageFromPages } from "./app-server/thread-history.js";
+import { applyEffectiveSettings, effectiveSandboxName } from "./app-server/effective-settings.js";
+import { readThreadListPages, isPaginationMethodUnavailable } from "./app-server/thread-list-pages.js";
 import {
   cloneModelPolicy,
   modelInfoFromResponse,
   modelInfoWithPolicy,
   modelsFromListResponse,
-  withoutModelInfo,
 } from "./app-server/model-policy.js";
 import {
   approvalPolicyForRunPolicy,
@@ -104,6 +108,8 @@ export class AppServerCodexAdapter implements CodexAdapter {
   private readonly sessionResumePromises = new Map<string, Promise<CodexSession>>();
   private lastCwdDiagnostic?: CodexCwdDiagnostic;
   private lastTransportDiagnostic?: CodexTransportDiagnostic;
+  private sessionListStatus?: CodexSessionListStatus;
+  private readonly historyRevisions = new Map<string, number>();
   private readonly turns = new AppServerTurnController({
     sessions: this.sessionStore.records,
     threadToSession: this.sessionStore.threadToSession,
@@ -127,6 +133,14 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   onBackgroundEvent(handler: CodexBackgroundEventHandler): () => void {
     return this.turns.onBackgroundEvent(handler);
+  }
+
+  getProtocolStatus() {
+    return this.rpc.getProtocolStatus();
+  }
+
+  getCapabilities(): CodexAdapterCapabilities {
+    return { mode: "app-server", interactiveApprovals: true, userInput: true, goals: true, steering: true, modelList: true, messagePhases: true, asyncQuestions: true };
   }
 
   async stop(): Promise<void> {
@@ -180,6 +194,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       this.sessionCollaborationModes.set(session.id, this.defaultCollaborationMode);
     }
     this.sessionStore.mapThread(threadId, session.id);
+    this.recordEffectiveSettings(session.id, response);
     this.loadedSessionIds.add(session.id);
     return session;
   }
@@ -198,10 +213,12 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const routeKey = this.sessionStore.get(sessionId)?.routeKey;
     this.restartAppServerForReload();
     const session = await this.loadSessionFromServer(sessionId, true, routeKey);
+    const revision = this.historyRevisions.get(sessionId);
     const lastAssistantMessage = await readLastAssistantMessageFromPages(
       (method, params) => this.request<Record<string, unknown>>(method, params),
       sessionId,
     );
+    if (revision !== this.historyRevisions.get(sessionId)) throw new Error("Codex 历史在读取期间已回退，请重新加载会话。");
     return {
       session,
       reloadedAt: new Date().toISOString(),
@@ -234,6 +251,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const discovered = findCodexSessionById(sessionId, { codexHome: this.codexHome });
     const modelPolicy = cloneModelPolicy(this.sessionModelPolicies.get(sessionId) ?? this.defaultModelPolicy);
     const runPolicy = this.runPolicyForSession(sessionId);
+    const revision = this.historyRevisions.get(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/resume", {
       threadId: sessionId,
       excludeTurns: true,
@@ -244,6 +262,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       approvalsReviewer: approvalsReviewerForRunPolicy(runPolicy),
       sandbox: sandboxModeForRunPolicy(runPolicy),
     });
+    if (revision !== this.historyRevisions.get(sessionId)) throw new Error("Codex 历史在恢复期间已回退，请重新恢复会话。");
     const thread = objectValue(response.thread);
     const cwd = stringValue(response.cwd) ?? stringValue(thread.cwd) ?? discovered?.cwd ?? process.cwd();
     const session: CodexSession = {
@@ -271,6 +290,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       this.sessionCollaborationModes.set(session.id, this.defaultCollaborationMode);
     }
     this.sessionStore.mapThread(sessionId, session.id);
+    this.recordEffectiveSettings(session.id, response);
     this.loadedSessionIds.add(session.id);
     return session;
   }
@@ -311,7 +331,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       const startedAt = startedAtFromTurn(turn);
       this.turns.registerTurn(sessionId, turnId, queue, collaborationMode);
       stored.status = withContext(stored, { type: "running", turnId, task: truncatePrompt(promptText), startedAt });
-      stored.status = withModelPolicy(stored.status, modelPolicy);
+      if (!stored.baseModel) stored.status = withModelPolicy(stored.status, modelPolicy);
       stored.currentTurnId = turnId;
       stored.updatedAt = new Date().toISOString();
     };
@@ -361,7 +381,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const stored = this.sessionStore.get(sessionId);
     const turnId = stored?.currentTurnId;
     if (!stored || !turnId) return;
-    stored.status = withContext(stored, { type: "idle" });
+    stored.status = withContext(stored, { type: "interrupted" });
     stored.updatedAt = new Date().toISOString();
     const pendingForTurn = [...this.pendingApprovals.entries()]
       .filter(([, pending]) => pending.sessionId === sessionId && pending.turnId === turnId);
@@ -380,8 +400,8 @@ export class AppServerCodexAdapter implements CodexAdapter {
     }
     const turn = this.turns.get(turnId);
     if (turn && !turn.closed) {
-      turn.queue.push({ type: "turn.completed", sessionId, turnId });
-      this.turns.closeTurn(turnId, "idle");
+      turn.queue.push({ type: "turn.interrupted", sessionId, turnId });
+      this.turns.closeTurn(turnId, "interrupted");
     }
     void this.request("turn/interrupt", { threadId: sessionId, turnId }, { timeoutMs: this.interruptTimeoutMs }).catch(() => undefined);
   }
@@ -399,11 +419,23 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async listSessions(routeKey?: string): Promise<CodexSessionSummary[]> {
-    if (routeKey) return this.sessionStore.listSessions(routeKey, this.codexHome);
+    this.sessionListStatus = undefined;
+    if (routeKey) {
+      this.sessionListStatus = { source: "local", pages: 0, truncated: false };
+      return this.sessionStore.listSessions(routeKey, this.codexHome);
+    }
     const runtimeSessions = this.sessionStore.listRuntimeSessions();
-    const appServerSessions = await this.listSessionsFromThreadList().catch(() => undefined);
+    const appServerSessions = await this.listSessionsFromThreadList().catch((error) => {
+      if (!isPaginationMethodUnavailable(error)) throw error;
+      this.sessionListStatus = { source: "local", pages: 0, truncated: true, notice: "当前 Codex 不支持远程会话列表，显示本机可发现的会话。" };
+      return undefined;
+    });
     if (appServerSessions) return mergeSessionSummaries(runtimeSessions, appServerSessions);
     return this.sessionStore.listSessions(undefined, this.codexHome);
+  }
+
+  getSessionListStatus(): CodexSessionListStatus | undefined {
+    return this.sessionListStatus ? { ...this.sessionListStatus } : undefined;
   }
 
   async getSessionDetail(sessionId: string): Promise<CodexSessionDetail | undefined> {
@@ -421,22 +453,9 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   private async listSessionsFromThreadList(): Promise<CodexSessionSummary[]> {
     await this.ensureStarted();
-    const response = await this.request<Record<string, unknown>>("thread/list", {
-      limit: 100,
-      sortKey: "recency_at",
-      sortDirection: "desc",
-      archived: false,
-      useStateDbOnly: false,
-    }).catch(async () => this.request<Record<string, unknown>>("thread/list", {
-      limit: 100,
-      sortKey: "updated_at",
-      sortDirection: "desc",
-      archived: false,
-      useStateDbOnly: false,
-    }));
-    return arrayValue(response.data)
-      .map((thread) => sessionSummaryFromThread(objectValue(thread)))
-      .filter((session): session is CodexSessionSummary => Boolean(session));
+    const result = await readThreadListPages((params) => this.request<Record<string, unknown>>("thread/list", params));
+    this.sessionListStatus = result.status;
+    return result.sessions;
   }
 
   async resolveApproval(approvalKey: string, decision: ApprovalDecision): Promise<void> {
@@ -444,15 +463,17 @@ export class AppServerCodexAdapter implements CodexAdapter {
     if (!pending) throw new Error(`未找到 Codex app-server 审批请求: ${approvalKey}`);
     const resolvedDecision = normalizeApprovalDecision(pending.approval, decision);
     if (!resolvedDecision) throw new Error(unsupportedApprovalDecisionText(pending.approval, decision));
-    await pending.resolve(resolvedDecision);
     this.pendingApprovals.delete(approvalKey);
+    await pending.resolve(resolvedDecision);
+    this.refreshInteractionStatus(pending.sessionId, pending.turnId);
   }
 
   async resolveUserInput(requestId: string, response: CodexUserInputResponse): Promise<void> {
     const pending = this.pendingUserInputs.get(requestId);
     if (!pending) throw new Error(`未找到 Codex app-server 用户输入请求: ${requestId}`);
-    await pending.resolve(response);
     this.pendingUserInputs.delete(requestId);
+    await pending.resolve(response);
+    this.refreshInteractionStatus(pending.sessionId, pending.turnId);
     this.turns.pushTurnEvent(pending.turnId, {
       type: "input.resolved",
       sessionId: pending.sessionId,
@@ -475,14 +496,17 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   getRunPolicyStatus(sessionId?: string): CodexRunPolicyStatus {
     const policy = this.runPolicyForSession(sessionId);
+    const effective = sessionId ? this.sessionStore.get(sessionId)?.status.effectiveSettings : undefined;
+    const approval = effective?.approvalPolicy;
     return {
       policy: cloneRunPolicy(policy),
-      interactiveApprovals: policy.permissionMode !== "full",
-      effectiveApprovalPolicy: policy.permissionMode === "full" ? "never" : "on-request",
-      effectiveApprovalsReviewer: approvalsReviewerForRunPolicy(policy),
-      effectiveSandbox: sandboxModeForRunPolicy(policy),
+      interactiveApprovals: approval != null ? approval !== "never" : policy.permissionMode !== "full",
+      effectiveApprovalPolicy: approval != null ? (typeof approval === "string" ? approval : JSON.stringify(approval)) : approvalPolicyForRunPolicy(policy),
+      effectiveApprovalsReviewer: effective?.approvalsReviewer !== undefined ? effective.approvalsReviewer : approvalsReviewerForRunPolicy(policy),
+      effectiveSandbox: effectiveSandboxName(effective) ?? sandboxModeForRunPolicy(policy),
+      ...(effective?.activePermissionProfile !== undefined ? { activePermissionProfile: effective.activePermissionProfile?.id ?? null } : {}),
       supportedPermissionModes: ["approval", "approve-for-me", "full"],
-      note: "codex app-server 会把审批请求回调给中间件，可通过微信 /OK、/P 或 /NO 处理。",
+      note: "codex app-server 会把审批请求回调给中间件，可通过微信 /OK、/P 或 /NO 处理。" + (effective ? " 生效值来自服务端最近一次确认；本地策略修改用于后续任务。" : " 当前显示本地请求策略，尚无服务端生效值。"),
     };
   }
 
@@ -510,12 +534,6 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const next = cloneModelPolicy(policy);
     if (sessionId) {
       this.sessionModelPolicies.set(sessionId, next);
-      const stored = this.sessionStore.get(sessionId);
-      if (stored) {
-        const model = modelInfoWithPolicy(stored.baseModel, next);
-        stored.status = model ? { ...stored.status, model } : withoutModelInfo(stored.status);
-        stored.updatedAt = new Date().toISOString();
-      }
       return;
     }
     this.defaultModelPolicy = next;
@@ -539,34 +557,55 @@ export class AppServerCodexAdapter implements CodexAdapter {
       threadId: sessionId,
     });
     const goal = objectValueOrNull(response.goal);
-    return goal ? goalFromResponse(goal) : null;
+    return this.cacheGoal(sessionId, goal ? goalFromResponse(goal) : null);
   }
 
-  async setGoal(sessionId: string, objective: string): Promise<CodexGoal> {
+  async setGoal(sessionId: string, objective: string, options?: CodexGoalMutationOptions): Promise<CodexGoal> {
     await this.ensureSessionLoaded(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/goal/set", {
       threadId: sessionId,
       objective,
+      ...(options ? { origin: options.origin } : {}),
       status: "active",
     });
-    return goalFromSetResponse(response);
+    return this.cacheGoal(sessionId, goalFromSetResponse(response));
   }
 
-  async setGoalStatus(sessionId: string, status: CodexGoalStatus): Promise<CodexGoal> {
+  async setGoalStatus(sessionId: string, status: CodexGoalStatus, options?: CodexGoalMutationOptions): Promise<CodexGoal> {
     await this.ensureSessionLoaded(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/goal/set", {
       threadId: sessionId,
       status,
+      ...(options ? { origin: options.origin } : {}),
     });
-    return goalFromSetResponse(response);
+    return this.cacheGoal(sessionId, goalFromSetResponse(response));
   }
 
-  async clearGoal(sessionId: string): Promise<boolean> {
+  async clearGoal(sessionId: string, options?: CodexGoalMutationOptions): Promise<boolean> {
     await this.ensureSessionLoaded(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/goal/clear", {
       threadId: sessionId,
+      ...(options ? { origin: options.origin } : {}),
     });
+    if (response.cleared) this.cacheGoal(sessionId, null);
     return Boolean(response.cleared);
+  }
+
+  private cacheGoal<T extends CodexGoal | null>(sessionId: string, goal: T): T {
+    const stored = this.sessionStore.get(sessionId);
+    if (stored) {
+      stored.status = { ...stored.status, goal };
+      stored.updatedAt = new Date().toISOString();
+    }
+    return goal;
+  }
+
+  private recordEffectiveSettings(sessionId: string, value: Record<string, unknown>): void {
+    const stored = this.sessionStore.get(sessionId);
+    if (!stored) return;
+    applyEffectiveSettings(stored, value);
+    const mode = objectValue(value.collaborationMode).mode;
+    if (mode === "plan" || mode === "default") this.sessionCollaborationModes.set(sessionId, mode);
   }
 
   async compactSession(sessionId: string): Promise<CodexCompactResult> {
@@ -677,30 +716,76 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   private handleNotification(notification: JsonRpcNotification): void {
+    const params = objectValue(notification.params);
+    if (notification.method === "thread/reverted") {
+      const threadId = stringValue(params.threadId);
+      if (threadId) {
+        const sessionId = this.sessionStore.resolveThreadSession(threadId);
+        this.historyRevisions.set(sessionId, (this.historyRevisions.get(sessionId) ?? 0) + 1);
+        this.loadedSessionIds.delete(sessionId);
+        this.sessionResumePromises.delete(sessionId);
+        const stored = this.sessionStore.get(sessionId);
+        if (stored) {
+          if (stored.currentTurnId && this.turns.get(stored.currentTurnId)) {
+            this.handleNotification({ method: "turn/completed", params: { threadId, turn: { id: stored.currentTurnId, status: "interrupted" } } });
+          }
+          const { context: _context, ...status } = stored.status;
+          stored.status = status;
+          stored.updatedAt = new Date().toISOString();
+        }
+      }
+      return;
+    }
+    if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
+      const threadId = stringValue(params.threadId);
+      const goal = objectValueOrNull(params.goal);
+      if (threadId && (goal || notification.method === "thread/goal/cleared")) {
+        this.cacheGoal(this.sessionStore.resolveThreadSession(threadId), goal ? goalFromResponse({ ...goal, threadId }) : null);
+      }
+      return;
+    }
+    const turnId = stringValue(params.turnId) ?? stringValue(objectValue(params.turn).id);
+    const terminal = notification.method === "turn/completed" || (notification.method === "error"
+      && params.willRetry !== true && !(params.willRetry === undefined && isTransientAppServerError(appServerErrorMessage(params))));
+    if (terminal && turnId) {
+      for (const [id, pending] of this.pendingUserInputs) {
+        if (pending.turnId !== turnId) continue;
+        this.pendingUserInputs.delete(id);
+        this.turns.pushTurnEvent(turnId, { type: "input.resolved", sessionId: pending.sessionId, turnId, adapterRequestId: id });
+      }
+      for (const [id, pending] of this.pendingApprovals) {
+        if (pending.turnId !== turnId) continue;
+        this.pendingApprovals.delete(id);
+        this.turns.pushTurnEvent(turnId, { type: "approval.resolved", sessionId: pending.sessionId, turnId, adapterApprovalId: id });
+      }
+    }
     this.handleServerRequestResolvedNotification(notification);
     this.handleStatusNotification(notification);
     this.handleCompactNotification(notification);
     this.turns.handleNotification(notification);
+    if (turnId && this.turns.isClosed(turnId)) {
+      for (const [id, pending] of this.pendingUserInputs) if (pending.turnId === turnId) this.pendingUserInputs.delete(id);
+      for (const [id, pending] of this.pendingApprovals) if (pending.turnId === turnId) this.pendingApprovals.delete(id);
+    }
   }
 
   private handleServerRequestResolvedNotification(notification: JsonRpcNotification): void {
     if (notification.method !== "serverRequest/resolved") return;
     const params = objectValue(notification.params);
-    const requestId = params.requestId !== undefined && params.requestId !== null
+    const rawId = params.requestId !== undefined && params.requestId !== null
       ? String(params.requestId)
       : stringValue(params.id);
-    if (!requestId) return;
+    if (!rawId) return;
+    const requestId = this.rpc.serverRequestKey(rawId);
     const pending = this.pendingApprovals.get(requestId);
     const pendingInput = this.pendingUserInputs.get(requestId);
     if (!pending && !pendingInput) return;
+    const expected = pendingInput ?? pending!;
+    if (stringValue(params.threadId) && this.sessionStore.resolveThreadSession(String(params.threadId)) !== expected.sessionId) return;
     if (pendingInput) {
       this.pendingUserInputs.delete(requestId);
-      const sessionId = this.sessionStore.resolveThreadSession(stringValue(params.threadId) ?? pendingInput.sessionId);
-      const stored = this.sessionStore.get(sessionId);
-      if (stored) {
-        stored.status = withContext(stored, { type: "running", turnId: pendingInput.turnId, startedAt: runningStartedAt(stored.status) });
-        stored.updatedAt = new Date().toISOString();
-      }
+      const sessionId = pendingInput.sessionId;
+      this.refreshInteractionStatus(sessionId, pendingInput.turnId);
       this.turns.pushTurnEvent(pendingInput.turnId, {
         type: "input.resolved",
         sessionId,
@@ -711,18 +796,26 @@ export class AppServerCodexAdapter implements CodexAdapter {
     }
     if (!pending) return;
     this.pendingApprovals.delete(requestId);
-    const sessionId = this.sessionStore.resolveThreadSession(stringValue(params.threadId) ?? pending.sessionId);
-    const stored = this.sessionStore.get(sessionId);
-    if (stored) {
-      stored.status = withContext(stored, { type: "running", turnId: pending.turnId, startedAt: runningStartedAt(stored.status) });
-      stored.updatedAt = new Date().toISOString();
-    }
+    const sessionId = pending.sessionId;
+    this.refreshInteractionStatus(sessionId, pending.turnId);
     this.turns.pushTurnEvent(pending.turnId, {
       type: "approval.resolved",
       sessionId,
       turnId: pending.turnId,
       adapterApprovalId: requestId,
     });
+  }
+
+  private refreshInteractionStatus(sessionId: string, turnId: string): void {
+    const stored = this.sessionStore.get(sessionId);
+    if (!stored || !this.turns.get(turnId) || (stored.currentTurnId && stored.currentTurnId !== turnId)) return;
+    const approval = [...this.pendingApprovals.values()].find((p) => p.sessionId === sessionId && p.turnId === turnId);
+    const input = [...this.pendingUserInputs.values()].find((p) => p.sessionId === sessionId && p.turnId === turnId && p.params.isBlocking !== false);
+    const startedAt = runningStartedAt(stored.status);
+    stored.status = withContext(stored, approval ? { type: "waiting_approval", detail: approval.approval.reason, startedAt }
+      : input ? { type: "waiting_input", detail: "Codex 等待用户输入", startedAt }
+      : { type: "running", turnId, startedAt });
+    stored.updatedAt = new Date().toISOString();
   }
 
   private handleStatusNotification(notification: JsonRpcNotification): void {
@@ -739,34 +832,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       return;
     }
     if (notification.method === "thread/settings/updated" && sessionId) {
-      const stored = this.sessionStore.get(sessionId);
-      const settings = objectValue(params.threadSettings);
-      if (stored) {
-        const cwd = stringValue(settings.cwd);
-        if (cwd) stored.session.cwd = cwd;
-        const model = stringValue(settings.model);
-        const provider = stringValue(settings.modelProvider);
-        const serviceTier = Object.prototype.hasOwnProperty.call(settings, "serviceTier")
-          ? stringValue(settings.serviceTier) ?? null
-          : undefined;
-        const reasoningEffort = Object.prototype.hasOwnProperty.call(settings, "effort")
-          ? stringValue(settings.effort) ?? null
-          : undefined;
-        const baseModel = model || provider || serviceTier !== undefined || reasoningEffort !== undefined
-          ? {
-              ...(model ? { model } : {}),
-              ...(provider ? { provider } : {}),
-              ...(serviceTier !== undefined ? { serviceTier } : {}),
-              ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
-            }
-          : undefined;
-        if (baseModel) {
-          stored.baseModel = baseModel;
-          const modelWithPolicy = modelInfoWithPolicy(baseModel, this.modelPolicyForSession(sessionId));
-          stored.status = modelWithPolicy ? { ...stored.status, model: modelWithPolicy } : withoutModelInfo(stored.status);
-        }
-        stored.updatedAt = new Date().toISOString();
-      }
+      this.recordEffectiveSettings(sessionId, objectValue(params.threadSettings));
       return;
     }
     if (notification.method === "thread/status/changed" && sessionId) {
@@ -780,7 +846,8 @@ export class AppServerCodexAdapter implements CodexAdapter {
           stored.currentTurnId = undefined;
         } else if (statusType === "active" && activeFlags.includes("waitingOnApproval")) {
           stored.status = withContext(stored, { type: "waiting_approval", detail: "Codex 等待审批", startedAt: runningStartedAt(stored.status) });
-        } else if (statusType === "active" && activeFlags.includes("waitingOnUserInput")) {
+        } else if (statusType === "active" && activeFlags.includes("waitingOnUserInput")
+          && !this.onlyNonblockingInputs(sessionId)) {
           stored.status = withContext(stored, { type: "waiting_input", detail: "Codex 等待用户输入", startedAt: runningStartedAt(stored.status) });
         } else if (statusType === "active") {
           stored.status = withContext(stored, {
@@ -845,11 +912,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       const fromModel = stringValue(params.fromModel);
       const toModel = stringValue(params.toModel);
       if (stored && toModel) {
-        stored.status = {
-          ...stored.status,
-          model: { ...(stored.status.model ?? {}), model: toModel },
-        };
-        stored.updatedAt = new Date().toISOString();
+        this.recordEffectiveSettings(sessionId, { model: toModel });
       }
       this.emitCodexNotification({
         method: notification.method,
@@ -946,7 +1009,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
     }
     if (notification.method === "error") {
       const error = appServerErrorMessage(params);
-      if (isTransientAppServerError(error)) return;
+      if (params.willRetry === true || (params.willRetry === undefined && isTransientAppServerError(error))) return;
       if (!turnId || !waiter.turnId || waiter.turnId === turnId) {
         this.rejectCompactWaiter(sessionId, new Error(error));
       }
@@ -955,8 +1018,8 @@ export class AppServerCodexAdapter implements CodexAdapter {
     if (notification.method === "turn/completed" && turnId && waiter.turnId === turnId) {
       const turn = objectValue(params.turn);
       const status = stringValue(turn.status);
-      if (status === "failed") {
-        const error = stringValue(objectValue(turn.error).message) ?? "上下文压缩失败";
+      if (status !== "completed") {
+        const error = stringValue(objectValue(turn.error).message) ?? (status === "interrupted" ? "上下文压缩已中断" : "上下文压缩失败");
         this.rejectCompactWaiter(sessionId, new Error(error));
         return;
       }
@@ -994,6 +1057,12 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   private async handleServerRequest(request: JsonRpcRequest): Promise<void> {
     const params = objectValue(request.params);
+    if (request.method === "currentTime/read") {
+      this.writeMessage(stringValue(params.threadId)
+        ? { id: request.id, result: { currentTimeAt: Math.floor(Date.now() / 1000) } }
+        : { id: request.id, error: { code: -32602, message: "currentTime/read requires threadId" } });
+      return;
+    }
     if (request.method === "item/tool/requestUserInput") {
       this.handleUserInputServerRequest(request, params);
       return;
@@ -1009,9 +1078,15 @@ export class AppServerCodexAdapter implements CodexAdapter {
       });
       return;
     }
-    const adapterApprovalId = String(request.id);
+    const adapterApprovalId = this.rpc.serverRequestKey(request.id);
+    approval.adapterApprovalId = adapterApprovalId;
     const turnId = approval.turnId;
     const sessionId = this.sessionStore.resolveThreadSession(approval.sessionId);
+    if (approval.availableDecisions?.length === 0) {
+      this.writeMessage({ id: request.id, error: { code: -32602, message: "approval has no supported decisions" } });
+      this.emitCodexNotification({ method: request.method, sessionId, turnId, kind: "warning", text: "Codex 审批没有可支持的选项，已拒绝处理；请在本机 Codex 检查该请求。", dedupeWindowMs: 0 });
+      return;
+    }
     if (approval.kind === "terminal_input" && !approval.command?.trim()) {
       this.writeMessage({
         id: request.id,
@@ -1044,15 +1119,15 @@ export class AppServerCodexAdapter implements CodexAdapter {
           id: request.id,
           result: responseForApprovalDecision(request.method, params, decision),
         });
-        const current = this.sessionStore.get(sessionId);
-        if (current) {
-          current.status = withContext(current, { type: "running", turnId, startedAt: runningStartedAt(current.status) });
-          current.updatedAt = new Date().toISOString();
-        }
       },
     };
     this.pendingApprovals.set(adapterApprovalId, pending);
     this.turns.pushTurnEvent(turnId, { type: "approval.requested", sessionId, turnId, approval });
+  }
+
+  private onlyNonblockingInputs(sessionId: string): boolean {
+    const inputs = [...this.pendingUserInputs.values()].filter((input) => input.sessionId === sessionId);
+    return inputs.length > 0 && inputs.every((input) => input.params.isBlocking === false);
   }
 
   private handleUserInputServerRequest(request: JsonRpcRequest, params: Record<string, unknown>): void {
@@ -1067,15 +1142,20 @@ export class AppServerCodexAdapter implements CodexAdapter {
       return;
     }
     const turnId = inputRequest.turnId;
+    if (this.turns.isClosed(turnId)) {
+      this.writeMessage({ id: request.id, error: { code: -32602, message: "user input belongs to a closed turn" } });
+      return;
+    }
     const resolvedSessionId = inputRequest.sessionId;
     this.turns.get(turnId) ?? this.turns.createBackgroundTurn(resolvedSessionId, turnId);
     const stored = this.sessionStore.get(resolvedSessionId);
-    if (stored) {
+    if (stored && inputRequest.isBlocking !== false) {
       const startedAt = runningStartedAt(stored.status);
       stored.status = withContext(stored, { type: "waiting_input", detail: "Codex 等待用户输入", startedAt });
       stored.updatedAt = new Date().toISOString();
     }
-    const adapterRequestId = String(request.id);
+    const adapterRequestId = this.rpc.serverRequestKey(request.id);
+    inputRequest.adapterRequestId = adapterRequestId;
     const pending: PendingServerUserInput = {
       method: request.method,
       requestId: request.id,
@@ -1087,11 +1167,6 @@ export class AppServerCodexAdapter implements CodexAdapter {
           id: request.id,
           result: response,
         });
-        const current = this.sessionStore.get(resolvedSessionId);
-        if (current) {
-          current.status = withContext(current, { type: "running", turnId, startedAt: runningStartedAt(current.status) });
-          current.updatedAt = new Date().toISOString();
-        }
       },
     };
     this.pendingUserInputs.set(adapterRequestId, pending);

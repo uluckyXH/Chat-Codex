@@ -265,6 +265,7 @@ export class BridgeSessionFlow {
     }
     const directories = buildSessionDirectories(items);
     const selection: SessionCwdSelectionState = {
+      notice: this.codex.getSessionListStatus?.()?.notice,
       stage: "cwd",
       items,
       directories,
@@ -639,6 +640,7 @@ export class BridgeSessionFlow {
       return;
     }
     const selection: SessionSelectionState = {
+      notice: this.codex.getSessionListStatus?.()?.notice,
       items: selectableItems,
       page: 1,
       pageSize: SESSION_LIST_PAGE_SIZE,
@@ -664,6 +666,7 @@ export class BridgeSessionFlow {
     const page = paginateSessionList(selection.items, "selectable", selection.page, selection.pageSize);
     selection.page = page.page;
     return formatSessionListPage(page, {
+      notice: selection.notice,
       title: "切换 Codex 会话",
       scopeLabel: "可切换会话",
       emptyText: "没有可切换的 Codex 会话。",
@@ -676,13 +679,14 @@ export class BridgeSessionFlow {
   private sessionDirectoryText(selection: SessionCwdSelectionState, intro?: string): string {
     const page = paginateSessionDirectories(selection.directories, selection.directoryPage, selection.pageSize);
     selection.directoryPage = page.page;
-    return formatSessionDirectoryPage(page, { intro });
+    return formatSessionDirectoryPage(page, { intro: [intro, selection.notice].filter(Boolean).join("\n") || undefined });
   }
 
   private cwdSessionSelectionText(selection: SessionCwdSelectionState, intro?: string): string {
     const page = paginateSessionList(selection.sessions, "selectable", selection.sessionPage, selection.pageSize);
     selection.sessionPage = page.page;
     return formatSessionListPage(page, {
+      notice: selection.notice,
       title: "目录下 Codex 会话",
       scopeLabel: formatSessionDirectoryScope(selection.selectedCwd),
       emptyText: "该目录下没有 Codex 会话。",

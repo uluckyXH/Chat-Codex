@@ -9,6 +9,7 @@ import type {
   CodexUserInputResponse,
 } from "../types.js";
 import type { CommandExecutionRecord } from "./command-output-summary.js";
+import type { AssistantMessages } from "./assistant-messages.js";
 
 export interface AppServerSessionRecord {
   session: CodexSession;
@@ -73,7 +74,7 @@ export interface TurnQueueRecord {
   finalText: string;
   progressDrafts: Map<string, ProgressDraft>;
   commandExecutions: Map<string, CommandExecutionRecord>;
-  agentMessagePhases: Map<string, "commentary" | "final_answer">;
+  assistantMessages: AssistantMessages;
   emittedProgressItemIds: Set<string>;
   emittedProgress: Set<string>;
   emittedCommentary: Set<string>;

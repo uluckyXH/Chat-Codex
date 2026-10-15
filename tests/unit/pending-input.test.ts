@@ -31,21 +31,110 @@ test("BridgePendingInputManager clears only requests from the failed turn", asyn
   manager.clearAll();
 });
 
+test("nonblocking requests coexist, allow regular input, never auto-answer, and route explicit selectors", async () => {
+  const codex = new InputCapableCodexAdapter();
+  const texts: string[] = [];
+  const manager = new BridgePendingInputManager({ codex, delivery: delivery(texts), timeoutMs: 1 });
+  const first = startInput("r", "s", "t", "optional-1");
+  first.request.isBlocking = false;
+  const second = startInput("r", "s", "t", "optional-2");
+  second.request.isBlocking = false;
+  await manager.start(first);
+  await manager.start(first);
+  await manager.start(second);
+  const firstSelector = questionSelector(texts[0]);
+  const secondSelector = questionSelector(texts[1]);
+  assert.equal(manager.has("r"), false);
+  assert.equal(await manager.handleMessage({ ...first, rawText: "继续执行" }), false);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(codex.answers.length, 0);
+  await manager.handleMessage({ ...first, rawText: `/a1@Q${secondSelector}` });
+  assert.equal(codex.answers[0]?.id, "optional-2");
+  await manager.handleResolved("r", "optional-1");
+  await manager.handleMessage({ ...first, rawText: `/a1@Q${firstSelector}` });
+  assert.equal(codex.answers.length, 1);
+  manager.clearAll();
+});
+
+test("answering an optional request keeps a blocking request and its queue intact", async () => {
+  const codex = new InputCapableCodexAdapter();
+  const texts: string[] = [];
+  const manager = new BridgePendingInputManager({ codex, delivery: delivery(texts) });
+  const blocking = startInput("r", "s", "t", "blocking");
+  await manager.start(blocking);
+  await manager.start(startInput("r", "s", "t", "queued"));
+  const optional = startInput("r", "s", "t", "optional");
+  optional.request.isBlocking = false;
+  await manager.start(optional);
+  await manager.handleMessage({ ...optional, rawText: `/a1@Q${questionSelector(texts.at(-1))}` });
+  assert.equal(manager.has("r"), true);
+  await manager.handleMessage({ ...blocking, rawText: "/a1" });
+  assert.equal(manager.has("r"), true);
+  assert.deepEqual(codex.answers.map((answer) => answer.id), ["optional", "blocking"]);
+  assert.equal(manager.clearTurn("r", "s", "t"), 1);
+  manager.clearAll();
+});
+
 class InputCapableCodexAdapter extends MockCodexAdapter {
-  async resolveUserInput(_requestId: string, _response: CodexUserInputResponse): Promise<void> {}
+  answers: Array<{ id: string; response: CodexUserInputResponse }> = [];
+  async resolveUserInput(id: string, response: CodexUserInputResponse): Promise<void> { this.answers.push({ id, response }); }
 }
 
-function delivery(): BridgeDelivery {
+test("resolved notification during submission advances a blocking queue exactly once", async () => {
+  const codex = new InputCapableCodexAdapter();
+  const manager = new BridgePendingInputManager({ codex, delivery: delivery() });
+  const first = startInput("r", "s", "t", "one");
+  await manager.start(first);
+  await manager.start(startInput("r", "s", "t", "two"));
+  await manager.start(startInput("r", "s", "t", "three"));
+  codex.resolveUserInput = async (id) => { await manager.handleResolved("r", id); };
+  await manager.handleMessage({ ...first, rawText: "/a1" });
+  assert.equal(manager.clearTurn("r", "s", "t"), 2);
+  manager.clearAll();
+});
+
+function delivery(texts?: string[]): BridgeDelivery {
   const approvals = new ApprovalManager();
   return new BridgeDelivery({
     channels: {
-      sendText: async () => ({ channelId: "mock", messageId: "mock-message", deliveredAt: new Date().toISOString() }),
+      sendText: async (_target: ChannelTarget, text: string) => {
+        texts?.push(text);
+        return { channelId: "mock", messageId: "mock-message", deliveredAt: new Date().toISOString() };
+      },
     } as unknown as ChannelRegistry,
     approvals,
     logger: new SilentLogger(),
     approvalSendRetryDelayMs: 1,
   });
 }
+
+function questionSelector(text: string | undefined): string {
+  const selector = text?.match(/@Q([a-z0-9_-]+)/i)?.[1];
+  assert.ok(selector);
+  return selector;
+}
+
+test("optional question selectors cannot be reused across bridge restarts or fall through to blocking input", async () => {
+  const codex = new InputCapableCodexAdapter();
+  const texts: string[] = [];
+  const first = new BridgePendingInputManager({ codex, delivery: delivery(texts) });
+  const request = startInput("r", "s", "t", "old");
+  request.request.isBlocking = false;
+  await first.start(request);
+  const oldSelector = questionSelector(texts.at(-1));
+  first.clearAll();
+  const restarted = new BridgePendingInputManager({ codex, delivery: delivery(texts) });
+  const next = startInput("r", "s", "next", "new");
+  next.request.isBlocking = false;
+  await restarted.start(next);
+  assert.notEqual(questionSelector(texts.at(-1)), oldSelector);
+  await restarted.start(startInput("r", "s", "next", "blocking"));
+  await restarted.handleMessage({ ...request, rawText: `/a1@Q${oldSelector}` });
+  await restarted.handleMessage({ ...request, rawText: "/a1@Q?invalid" });
+  assert.equal(codex.answers.length, 0);
+  assert.equal(restarted.has("r"), true);
+  restarted.clearAll();
+});
 
 function startInput(routeKey: string, sessionId: string, turnId: string, adapterRequestId: string) {
   const target: ChannelTarget = {

@@ -8,6 +8,7 @@ import { AppServerRpcClient } from "../../src/codex/app-server/rpc-client.js";
 import { AppServerSessionStore } from "../../src/codex/app-server/session-store.js";
 import { AppServerTurnController } from "../../src/codex/app-server/turn-controller.js";
 import { AsyncEventQueue } from "../../src/codex/app-server/turn-store.js";
+import { chatCodexVersion } from "../../src/runtime/package-info.js";
 
 test("app-server session store keeps local sessions and thread mappings", () => {
   const store = new AppServerSessionStore();
@@ -187,7 +188,8 @@ const rl = createInterface({ input: process.stdin });
 for await (const line of rl) {
   const message = JSON.parse(line);
   if (message.method === "initialize") {
-    console.log(JSON.stringify({ id: message.id, result: { ok: true } }));
+    if (message.params.clientInfo.version !== ${JSON.stringify(chatCodexVersion())}) throw new Error("wrong client version");
+    console.log(JSON.stringify({ id: message.id, result: { userAgent: "fake-codex/0.162.1" } }));
   } else if (message.method === "model/list") {
     console.log(JSON.stringify({ id: message.id, result: { data: [{ id: "fake" }], nextCursor: null } }));
   } else if (message.method === "large") {
@@ -208,13 +210,17 @@ for await (const line of rl) {
     onFatalError: () => undefined,
   });
   try {
+    assert.equal(client.getProtocolStatus().verification, "not_connected");
     await client.start();
+    assert.equal(client.getProtocolStatus().verification, "handshake_only");
+    assert.equal(client.getProtocolStatus().serverUserAgent, "fake-codex/0.162.1");
     assert.deepEqual(await client.request("model/list"), { data: [{ id: "fake" }], nextCursor: null });
     const large = await client.request<{ payload: string }>("large");
     assert.equal(large.payload.length, 25_000_000);
     assert.deepEqual(await client.request("emit"), { emitted: true });
     assert.deepEqual(notifications, [{ method: "turn/started", params: { threadId: "thread-1", turnId: "turn-1" } }]);
     client.stop();
+    assert.equal(client.getProtocolStatus().initialized, false);
     await client.start();
     assert.deepEqual(await client.request("model/list"), { data: [{ id: "fake" }], nextCursor: null });
   } finally {

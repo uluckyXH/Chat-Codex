@@ -266,8 +266,33 @@ test("ExecCodexAdapter cancel terminates a running exec task", async () => {
   await adapter.cancel(session.id);
   await runPromise;
 
-  assert.deepEqual(events, ["turn.started", "turn.completed"]);
-  assert.equal((await adapter.getStatus(session.id)).type, "idle");
+  assert.deepEqual(events, ["turn.started", "turn.interrupted"]);
+  assert.equal((await adapter.getStatus(session.id)).type, "interrupted");
+});
+
+test("exec stream failures remain failed even on exit zero and emit only one terminal result", async (t) => {
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fakeBin = path.join(root, "fake-codex.mjs");
+  fs.writeFileSync(fakeBin, `#!/usr/bin/env node\nconsole.log(JSON.stringify({ type: "turn.failed", error: { message: "failed upstream" } }));\nconsole.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "should not send" } }));\n`);
+  fs.chmodSync(fakeBin, 0o755);
+  const adapter = new ExecCodexAdapter({ codexBin: fakeBin });
+  const session = await adapter.startSession({ cwd: root, routeKey: "r" });
+  const events = [];
+  for await (const event of adapter.run(session.id, "test")) events.push(event);
+  assert.deepEqual(events.map((event) => event.type), ["turn.started", "turn.failed"]);
+  assert.equal((await adapter.getStatus(session.id)).type, "failed");
+  assert.equal(adapter.getCapabilities().asyncQuestions, false);
+  assert.equal(adapter.getCapabilities().interactiveApprovals, false);
+});
+
+test("exec spawn errors are reported as a failed turn", async () => {
+  const adapter = new ExecCodexAdapter({ codexBin: path.join(os.tmpdir(), "codex-does-not-exist-protocol-test") });
+  const session = await adapter.startSession({ cwd: os.tmpdir(), routeKey: "r" });
+  const events = [];
+  for await (const event of adapter.run(session.id, "test")) events.push(event);
+  assert.deepEqual(events.map((event) => event.type), ["turn.started", "turn.failed"]);
+  assert.equal((await adapter.getStatus(session.id)).type, "failed");
 });
 
 async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 1000): Promise<void> {

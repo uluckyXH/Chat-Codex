@@ -1,6 +1,7 @@
 import type { ApprovalDecision, ApprovalKind, ApprovalRequest } from "../../approvals/types.js";
 import { terminalInputApprovalDetailsFromCommand } from "./terminal-input-approval.js";
 import { arrayValue, objectValue, stringValue } from "./value-parsers.js";
+import { supportedPermissionProfile } from "./permission-profile.js";
 
 export function approvalKindForMethod(method: string, params: Record<string, unknown> = {}): ApprovalKind | undefined {
   if (method === "item/commandExecution/requestApproval") {
@@ -44,7 +45,8 @@ export function approvalFromServerRequest(
     : undefined;
   const environmentId = stringValue(params.environmentId);
   const cwd = stringValue(params.cwd) ?? stringValue(params.grantRoot);
-  const reason = stringValue(params.reason);
+  const permissionSupported = kind !== "permissions" || supportedPermissionProfile(params.permissions);
+  const reason = kind === "permissions" ? [stringValue(params.reason), permissionSupported ? "请求权限范围：" : "无法识别的权限结构，仅允许拒绝：", JSON.stringify(params.permissions)].filter(Boolean).join("\n") : stringValue(params.reason);
   return {
     kind,
     adapterApprovalId: String(requestId),
@@ -60,7 +62,7 @@ export function approvalFromServerRequest(
       terminalInput: terminalInput.input,
     } : {}),
     risk: command && riskyCommand(command) ? "high" : undefined,
-    availableDecisions: availableDecisionsFromParams(params, kind),
+    availableDecisions: permissionSupported ? availableDecisionsFromParams(params, kind) : ["deny", "cancel"],
     raw: params,
   };
 }
@@ -79,7 +81,7 @@ function availableDecisionsFromParams(
   const fromServer = arrayValue(params.availableDecisions)
     .map(approvalDecisionFromServer)
     .filter((decision): decision is ApprovalDecision => Boolean(decision));
-  if (fromServer.length > 0) return [...new Set(fromServer)];
+  if (params.availableDecisions != null) return [...new Set(fromServer)];
   return kind === "terminal_input"
     ? ["approve", "cancel"]
     : ["approve", "approve-session", "deny", "cancel"];
@@ -108,6 +110,7 @@ function legacyReviewDecision(decision: ApprovalDecision): "approved" | "approve
 }
 
 function grantedPermissionsFromRequest(params: Record<string, unknown>): Record<string, unknown> {
+  if (!supportedPermissionProfile(params.permissions)) throw new Error("unsupported permission profile");
   const requested = objectValue(params.permissions);
   const granted: Record<string, unknown> = {};
   if (requested.network !== undefined && requested.network !== null) granted.network = requested.network;

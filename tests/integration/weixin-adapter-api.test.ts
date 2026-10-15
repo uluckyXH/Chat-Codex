@@ -228,8 +228,8 @@ test("WeixinAdapter sends text messages with context token and run id", async ()
   assert.ok(call.signal, "sendmessage should have an abort signal");
   assert.equal(call.headers.get("Authorization"), "Bearer token-1");
   const body = JSON.parse(call.body ?? "{}");
-  assert.equal(body.base_info.channel_version, "2.4.6");
-  assert.equal(call.headers.get("iLink-App-ClientVersion"), "132102");
+  assert.equal(body.base_info.channel_version, "2.4.10");
+  assert.equal(call.headers.get("iLink-App-ClientVersion"), "132106");
   assert.equal(body.msg.to_user_id, "user@im.wechat");
   assert.equal(body.msg.context_token, "ctx-1");
   assert.equal(body.msg.run_id, "run-1");
@@ -1001,7 +1001,7 @@ test("WeixinAdapter marks channel login_required when getupdates reports expired
   const status = await adapter.getStatus();
   assert.equal(status.state, "login_required");
   assert.equal(status.account, "abc-im-bot");
-  assert.match(status.lastError ?? "", /session expired/);
+  assert.match(status.lastError ?? "", /token is stale/);
 });
 
 test("WeixinAdapter stop aborts a pending long-poll without waiting for its timeout", async () => {

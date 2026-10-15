@@ -26,6 +26,7 @@ export interface SessionListPage {
 }
 
 export interface FormatSessionListOptions {
+  notice?: string;
   title: string;
   scopeLabel: string;
   emptyText: string;
@@ -104,6 +105,7 @@ export function formatSessionListPage(page: SessionListPage, options: FormatSess
   const lines = [
     `**${options.title}**`,
     options.intro,
+    options.notice,
     "",
     `- 范围: ${options.scopeLabel}`,
     `- 页码: \`${page.page} / ${page.totalPages}\``,

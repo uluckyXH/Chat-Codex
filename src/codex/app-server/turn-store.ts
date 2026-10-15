@@ -1,5 +1,6 @@
 import type { CodexCollaborationMode, CodexEvent } from "../types.js";
 import type { TurnQueueRecord } from "./types.js";
+import { AssistantMessages } from "./assistant-messages.js";
 
 export class AsyncEventQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -50,7 +51,7 @@ export function createTurnQueueRecord(
     finalText: "",
     progressDrafts: new Map(),
     commandExecutions: new Map(),
-    agentMessagePhases: new Map(),
+    assistantMessages: new AssistantMessages(),
     emittedProgressItemIds: new Set(),
     emittedProgress: new Set(),
     emittedCommentary: new Set(),

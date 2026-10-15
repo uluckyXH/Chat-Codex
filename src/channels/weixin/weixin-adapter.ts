@@ -6,6 +6,7 @@ import type {
   ChannelMedia,
   ChannelMessage,
   ChannelMessageHandler,
+  ChannelQuoteDiagnostics,
   ChannelStatus,
   ChannelTarget,
   ChannelToolProgress,
@@ -13,18 +14,25 @@ import type {
   SendResult,
 } from "../../protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../../protocol/delivery-policy.js";
+import fs from "node:fs/promises";
 import { saveInboundMedia } from "../../bridge/inbound-media-store.js";
 import { buildRouteKey } from "../../protocol/channel.js";
 import { FileWeixinAccountStore, normalizeWeixinAccountId, type StoredWeixinAccount, type WeixinAccountStore } from "./weixin-account-store.js";
 import { WeixinApiClient, type WeixinApiClientOptions } from "./weixin-api.js";
+import { weixinMessageId } from "./weixin-json.js";
+import { resolveWeixinQuote, unavailableWeixinQuoteText, weixinInlineQuoteText, weixinItemText, weixinQuoteDiagnostics, weixinReference } from "./weixin-quotes.js";
+import { WeixinQuoteStore, type WeixinQuoteCachePolicy } from "./weixin-quote-store.js";
+import { WeixinNetworkError } from "./weixin-network-error.js";
 import {
   WeixinMessageItemType,
+  WEIXIN_PROTOCOL_VERSION,
   WeixinMessageState,
   WeixinMessageType,
   type WeixinMessageItem,
   type WeixinMessage,
   type WeixinQrStatusResponse,
   type WeixinSendMessageRequest,
+  type WeixinSendMessageResponse,
 } from "./weixin-types.js";
 import {
   DEFAULT_WEIXIN_CDN_BASE_URL,
@@ -58,6 +66,7 @@ export interface WeixinAdapterOptions {
   outboundRequestTimeoutMs?: number;
   mediaRequestTimeoutMs?: number;
   inboundMediaRootDir?: string;
+  quoteCache?: Partial<WeixinQuoteCachePolicy>;
   now?: () => number;
 }
 
@@ -82,7 +91,7 @@ interface CachedTypingTicket {
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
-const SESSION_EXPIRED_ERRCODE = -14;
+const STALE_TOKEN_ERRCODE = -14;
 const TYPING_TICKET_TTL_MS = 20 * 60 * 1000;
 const GETCONFIG_PROBE_INTERVAL_MS = 30_000;
 const DEFAULT_OUTBOUND_MIN_INTERVAL_MS = 1200;
@@ -138,10 +147,11 @@ export class WeixinAdapter implements ChannelAdapter {
   private typingQueue: Promise<void> = Promise.resolve();
   private lastOutboundSentAt = 0;
   private readonly typingTickets = new Map<string, CachedTypingTicket>();
+  private readonly quoteStore?: WeixinQuoteStore;
 
   constructor(private readonly options: WeixinAdapterOptions = {}) {
     this.id = options.id ?? "weixin";
-    this.sourceVersion = options.sourceVersion ?? "2.4.6";
+    this.sourceVersion = options.sourceVersion ?? WEIXIN_PROTOCOL_VERSION;
     this.botType = options.botType ?? DEFAULT_BOT_TYPE;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.cdnBaseUrl = options.cdnBaseUrl ?? DEFAULT_WEIXIN_CDN_BASE_URL;
@@ -164,6 +174,14 @@ export class WeixinAdapter implements ChannelAdapter {
     this.mediaRequestTimeoutMs = options.mediaRequestTimeoutMs ?? DEFAULT_MEDIA_REQUEST_TIMEOUT_MS;
     this.inboundMediaRootDir = options.inboundMediaRootDir;
     this.now = options.now ?? (() => Date.now());
+    const stateDir = options.stateDir ?? (this.store instanceof FileWeixinAccountStore ? this.store.getStateDir() : undefined);
+    if (stateDir) this.quoteStore = new WeixinQuoteStore({
+      rootDir: stateDir,
+      channelId: this.id,
+      policy: options.quoteCache,
+      now: this.now,
+      onError: () => { this.status = { ...this.status, details: { ...this.status.details, quoteCache: "unavailable" } }; },
+    });
     this.status = {
       channelId: this.id,
       state: "login_required",
@@ -200,12 +218,13 @@ export class WeixinAdapter implements ChannelAdapter {
     const account = this.resolveAccount();
     if (account) {
       try {
-        await this.api.notifyStop({ token: account.token, timeoutMs: 10_000 });
+        await this.api.notifyStop({ token: account.token, baseUrl: account.baseUrl, timeoutMs: 10_000 });
       } catch {
         // stopping should be best effort
       }
     }
     await this.pollTask?.catch(() => undefined);
+    await this.quoteStore?.close();
     this.status = { ...this.status, state: "stopped" };
   }
 
@@ -305,7 +324,8 @@ export class WeixinAdapter implements ChannelAdapter {
         item_list: text ? [{ type: WeixinMessageItemType.TEXT, text_item: { text } }] : undefined,
       },
     };
-    await this.sendRawMessage(account, body);
+    const response = await this.sendRawMessage(account, body);
+    if (response.message_id && text) await this.quoteStore?.put(account.accountId, target.conversation.id, response.message_id, text);
     const deliveredAt = new Date().toISOString();
     this.status = {
       ...this.status,
@@ -313,10 +333,12 @@ export class WeixinAdapter implements ChannelAdapter {
       account: account.accountId,
       lastOutboundAt: deliveredAt,
       lastError: undefined,
+      details: { ...this.status.details, networkFailure: undefined },
     };
     return {
       channelId: this.id,
       messageId: clientId,
+      serverMessageId: weixinMessageId(response.message_id),
       deliveredAt,
       raw: body,
     };
@@ -338,6 +360,7 @@ export class WeixinAdapter implements ChannelAdapter {
       api: this.api,
       token: account.token,
       filePath,
+      baseUrl: account.baseUrl,
       toUserId,
       cdnBaseUrl: account.cdnBaseUrl ?? this.cdnBaseUrl,
       mediaType: uploadMediaType,
@@ -350,7 +373,11 @@ export class WeixinAdapter implements ChannelAdapter {
       ? buildWeixinImageItem(uploaded)
       : buildWeixinFileItem(uploaded, media.name ?? pathBasename(filePath)));
 
-    const result = await this.sendItems(target, account, items, options);
+    const result = await this.sendItems(target, account, items, options, {
+      id: "media", type: uploadMediaType === "IMAGE" ? "image" : "file",
+      localPath: filePath, name: media.name ?? pathBasename(filePath), mimeType: media.mimeType,
+      sizeBytes: uploaded.fileSize, downloadState: "available",
+    });
     return {
       ...result,
       raw: { media, uploaded: { filekey: uploaded.filekey, fileSize: uploaded.fileSize } },
@@ -427,6 +454,7 @@ export class WeixinAdapter implements ChannelAdapter {
     if (!ticket) return;
     await this.api.sendTyping({
       token: account.token,
+      baseUrl: account.baseUrl,
       timeoutMs: 10_000,
       body: {
         ilink_user_id: toUserId,
@@ -514,7 +542,7 @@ export class WeixinAdapter implements ChannelAdapter {
 
   private async pollLoop(account: StoredWeixinAccount, signal: AbortSignal): Promise<void> {
     try {
-      await this.api.notifyStart({ token: account.token, timeoutMs: 10_000 });
+      await this.api.notifyStart({ token: account.token, baseUrl: account.baseUrl, timeoutMs: 10_000 });
     } catch {
       // notifyStart is useful but not required to begin polling
     }
@@ -524,17 +552,18 @@ export class WeixinAdapter implements ChannelAdapter {
       try {
         const response = await this.api.getUpdates({
           token: account.token,
+          baseUrl: account.baseUrl,
           getUpdatesBuf,
           timeoutMs: longPollTimeoutMs,
           signal,
         });
         longPollTimeoutMs = nextLongPollTimeoutMs(longPollTimeoutMs, response.longpolling_timeout_ms);
-        if (response.ret === SESSION_EXPIRED_ERRCODE || response.errcode === SESSION_EXPIRED_ERRCODE) {
+        if (response.ret === STALE_TOKEN_ERRCODE || response.errcode === STALE_TOKEN_ERRCODE) {
           this.status = {
             ...this.status,
             state: "login_required",
             account: account.accountId,
-            lastError: "weixin session expired, login required",
+            lastError: "weixin bot token is stale, login required",
           };
           return;
         }
@@ -551,7 +580,8 @@ export class WeixinAdapter implements ChannelAdapter {
       } catch (error) {
         if (signal.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
-        this.status = { ...this.status, state: "degraded", lastError: message };
+        this.status = { ...this.status, state: "degraded", lastError: message,
+          details: { ...this.status.details, ...(error instanceof WeixinNetworkError ? { networkFailure: error.failure } : {}) } };
         await sleep(2000);
       }
     }
@@ -561,12 +591,48 @@ export class WeixinAdapter implements ChannelAdapter {
     if (!this.handler) return;
     const message = weixinMessageToChannelMessage(this.id, account.accountId, raw);
     await this.downloadInboundAttachments(message, account);
+    const serverId = weixinMessageId(raw.message_id) ?? raw.item_list?.map((item) => weixinMessageId(item.msg_id)).find(Boolean);
+    if (serverId) await this.quoteStore?.put(account.accountId, message.conversation.id, serverId,
+      message.text ?? (raw.item_list ?? []).map(weixinItemText).filter(Boolean).join("\n"),
+      message.attachments?.filter((attachment) => attachment.caption !== "引用附件"));
+    const ref = weixinReference(raw);
+    const referenceId = weixinMessageId(ref?.svr_id) ?? weixinMessageId(ref?.message_item?.msg_id);
+    let quoteCache: ChannelQuoteDiagnostics["cache"] = "not-needed";
+    let cachedQuoteText: string | undefined;
+    let missingQuoteMedia = false;
+    if (ref && !weixinInlineQuoteText(ref)) {
+      const lookup = referenceId ? await this.quoteStore?.lookup(account.accountId, message.conversation.id, referenceId) : undefined;
+      quoteCache = !referenceId ? "missing-id" : lookup?.status ?? "not-configured";
+      const cached = lookup?.status === "hit" ? lookup.record : undefined;
+      cachedQuoteText = cached?.text;
+      message.quotedMessage = resolveWeixinQuote(raw, cached?.text);
+      if (!cached?.text && message.quotedMessage) message.quotedMessage.text = unavailableWeixinQuoteText(quoteCache);
+      missingQuoteMedia = cached?.mediaExpired ?? false;
+      if (cached?.mediaExpired && message.quotedMessage) message.quotedMessage.text += "\n[引用附件已过期或未保留，请重新发送附件]";
+      for (const attachment of cached?.attachments ?? []) {
+        try {
+          // Give the active turn its own upload; quote-cache GC cannot remove it mid-task.
+          const saved = await saveInboundMedia({ message, attachment, data: await fs.readFile(attachment.localPath!), rootDir: this.inboundMediaRootDir });
+          (message.attachments ??= []).push({ ...attachment, localPath: saved.localPath, mimeType: saved.mimeType ?? attachment.mimeType });
+        } catch {
+          missingQuoteMedia = true;
+          if (message.quotedMessage) message.quotedMessage.text += "\n[引用附件无法恢复，请重新发送附件]";
+        }
+      }
+    }
+    if (ref && message.quotedMessage) {
+      const attachments = message.attachments?.filter((attachment) => attachment.caption === "引用附件") ?? [];
+      const media = missingQuoteMedia || attachments.some((attachment) => attachment.downloadState !== "available")
+        ? "unavailable" : attachments.length ? "available" : "none";
+      message.quoteDiagnostics = weixinQuoteDiagnostics(raw, message.quotedMessage, quoteCache, media, cachedQuoteText);
+    }
     this.status = {
       ...this.status,
       state: "connected",
       account: account.accountId,
       lastInboundAt: message.timestamp,
       lastError: undefined,
+      details: { ...this.status.details, networkFailure: undefined },
     };
     await this.handler(message);
   }
@@ -576,8 +642,10 @@ export class WeixinAdapter implements ChannelAdapter {
     account: StoredWeixinAccount,
     items: WeixinMessageItem[],
     options?: SendOptions,
+    sourceMedia?: ChannelAttachment,
   ): Promise<SendResult> {
     let lastClientId = "";
+    let serverMessageId: string | undefined;
     let lastBody: WeixinSendMessageRequest | undefined;
     for (const item of items) {
       lastClientId = `codex-weixin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -592,7 +660,11 @@ export class WeixinAdapter implements ChannelAdapter {
           item_list: [item],
         },
       };
-      await this.sendRawMessage(account, body);
+      const response = await this.sendRawMessage(account, body);
+      serverMessageId = weixinMessageId(response.message_id);
+      const itemText = weixinItemText(item);
+      if (serverMessageId && itemText) await this.quoteStore?.put(account.accountId, target.conversation.id, serverMessageId, itemText,
+        item.type !== WeixinMessageItemType.TEXT && sourceMedia ? [sourceMedia] : []);
       lastBody = body;
     }
     const deliveredAt = new Date().toISOString();
@@ -602,10 +674,12 @@ export class WeixinAdapter implements ChannelAdapter {
       account: account.accountId,
       lastOutboundAt: deliveredAt,
       lastError: undefined,
+      details: { ...this.status.details, networkFailure: undefined },
     };
     return {
       channelId: this.id,
       messageId: lastClientId,
+      serverMessageId,
       deliveredAt,
       raw: lastBody,
     };
@@ -633,6 +707,7 @@ export class WeixinAdapter implements ChannelAdapter {
     }
     const config = await this.api.getConfig({
       token: account.token,
+      baseUrl: account.baseUrl,
       timeoutMs: 10_000,
       body: {
         ilink_user_id: toUserId,
@@ -660,11 +735,9 @@ export class WeixinAdapter implements ChannelAdapter {
     return undefined;
   }
 
-  private async sendRawMessage(account: StoredWeixinAccount, body: WeixinSendMessageRequest): Promise<void> {
+  private async sendRawMessage(account: StoredWeixinAccount, body: WeixinSendMessageRequest): Promise<WeixinSendMessageResponse> {
     try {
-      await this.enqueueOutbound(async () => {
-        await this.sendMessageWithRetry(account, body);
-      });
+      return await this.enqueueOutbound(() => this.sendMessageWithRetry(account, body));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.status = {
@@ -672,19 +745,19 @@ export class WeixinAdapter implements ChannelAdapter {
         state: "degraded",
         account: account.accountId,
         lastError: message,
+        details: { ...this.status.details, ...(error instanceof WeixinNetworkError ? { networkFailure: error.failure } : {}) },
       };
       throw error;
     }
   }
 
-  private async sendMessageWithRetry(account: StoredWeixinAccount, body: WeixinSendMessageRequest): Promise<void> {
+  private async sendMessageWithRetry(account: StoredWeixinAccount, body: WeixinSendMessageRequest): Promise<WeixinSendMessageResponse> {
     let attempt = 0;
     let requestBody = body;
     let retriedWithoutContextToken = false;
     while (true) {
       try {
-        await this.api.sendMessage({ token: account.token, body: requestBody, timeoutMs: this.outboundRequestTimeoutMs });
-        return;
+        return await this.api.sendMessage({ token: account.token, baseUrl: account.baseUrl, body: requestBody, timeoutMs: this.outboundRequestTimeoutMs });
       } catch (error) {
         if (
           !retriedWithoutContextToken
@@ -872,7 +945,8 @@ export function weixinMessageToChannelMessage(channelId: string, accountId: stri
   const conversationKind = raw.group_id ? "group" : "direct";
   const conversationId = raw.group_id || senderId;
   return {
-    id: String(raw.message_id ?? raw.client_id ?? raw.seq ?? `weixin-${Date.now()}`),
+    id: weixinMessageId(raw.message_id) ?? raw.item_list?.map((item) => weixinMessageId(item.msg_id)).find(Boolean)
+      ?? raw.client_id ?? String(raw.seq ?? `weixin-${Date.now()}`),
     routeKey: buildRouteKey({
       channelId,
       accountId,
@@ -884,6 +958,7 @@ export function weixinMessageToChannelMessage(channelId: string, accountId: stri
     sender: { id: senderId },
     conversation: { id: conversationId, kind: conversationKind },
     text: textFromWeixinMessage(raw),
+    quotedMessage: resolveWeixinQuote(raw),
     attachments: attachmentsFromWeixinMessage(raw),
     timestamp: new Date(raw.create_time_ms ?? Date.now()).toISOString(),
     raw,
@@ -910,12 +985,19 @@ interface WeixinInboundAttachmentRaw {
 
 function attachmentsFromWeixinMessage(raw: WeixinMessage): ChannelAttachment[] | undefined {
   const attachments: ChannelAttachment[] = [];
-  for (const [index, item] of (raw.item_list ?? []).entries()) {
+  const items = (raw.item_list ?? []).flatMap((item) => [
+    { item, quoted: false },
+    ...(item.ref_msg?.message_item ? [{ item: item.ref_msg.message_item, quoted: true }] : []),
+  ]);
+  for (const [index, { item, quoted }] of items.entries()) {
+    const prefix = quoted ? "quote-" : "";
+    const caption = quoted ? "引用附件" : undefined;
     if (item.type === WeixinMessageItemType.IMAGE && item.image_item) {
-      const attachmentId = String(item.msg_id ?? `image-${index}`);
+      const attachmentId = prefix + String(item.msg_id ?? `image-${index}`);
       attachments.push({
         id: attachmentId,
         type: "image",
+        caption,
         name: `weixin-image-${attachmentId}`,
         sizeBytes: firstPositiveNumber(item.image_item.hd_size, item.image_item.mid_size, item.image_item.thumb_size),
         url: item.image_item.media?.full_url ?? item.image_item.url,
@@ -926,10 +1008,11 @@ function attachmentsFromWeixinMessage(raw: WeixinMessage): ChannelAttachment[] |
         } satisfies WeixinInboundAttachmentRaw,
       });
     } else if (item.type === WeixinMessageItemType.FILE && item.file_item) {
-      const attachmentId = String(item.msg_id ?? item.file_item.file_name ?? `file-${index}`);
+      const attachmentId = prefix + String(item.msg_id ?? item.file_item.file_name ?? `file-${index}`);
       attachments.push({
         id: attachmentId,
         type: "file",
+        caption,
         name: item.file_item.file_name ?? `weixin-file-${attachmentId}`,
         sizeBytes: parseOptionalInteger(item.file_item.len),
         url: item.file_item.media?.full_url,
@@ -937,6 +1020,18 @@ function attachmentsFromWeixinMessage(raw: WeixinMessage): ChannelAttachment[] |
           media: item.file_item.media,
           aesKey: item.file_item.media?.aes_key,
         } satisfies WeixinInboundAttachmentRaw,
+      });
+    } else if (item.type === WeixinMessageItemType.VIDEO && item.video_item?.media) {
+      attachments.push({
+        id: `${prefix}${item.msg_id ?? `video-${index}`}`, type: "file", caption,
+        name: "weixin-video.mp4", mimeType: "video/mp4", sizeBytes: item.video_item.video_size,
+        raw: { media: item.video_item.media, aesKey: item.video_item.media.aes_key } satisfies WeixinInboundAttachmentRaw,
+      });
+    } else if (item.type === WeixinMessageItemType.VOICE && item.voice_item?.media && !item.voice_item.text) {
+      attachments.push({
+        id: `${prefix}${item.msg_id ?? `voice-${index}`}`, type: "file", caption,
+        name: "weixin-voice.silk", mimeType: "audio/silk",
+        raw: { media: item.voice_item.media, aesKey: item.voice_item.media.aes_key } satisfies WeixinInboundAttachmentRaw,
       });
     }
   }

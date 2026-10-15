@@ -11,6 +11,23 @@ import { SilentLogger } from "../../src/logging/logger.js";
 import type { ChannelRegistry } from "../../src/channels/registry.js";
 import type { ChannelMessage, ChannelTarget } from "../../src/protocol/channel.js";
 import { MemoryStateStore } from "../../src/state/memory-state-store.js";
+import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
+
+test("all explicit goal commands send user origin", async () => {
+  const codex = new MockCodexAdapter();
+  const session = await codex.startSession({ cwd: "/repo", routeKey: message().routeKey });
+  const fixture = commandFixture(codex);
+  fixture.state.bindSession(message().routeKey, session);
+  const origins: unknown[] = [];
+  fixture.codex.setGoal = async (id, objective, options) => { origins.push(options?.origin); return codex.getGoal(id).then((goal) => goal ?? { threadId: id, objective, status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 0, updatedAt: 0 }); };
+  fixture.codex.setGoalStatus = async (id, status, options) => { origins.push(options?.origin); return { threadId: id, objective: "目标", status, tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 0, updatedAt: 0 }; };
+  fixture.codex.clearGoal = async (_id, options) => { origins.push(options?.origin); return true; };
+  const flow = { ...sessionFlowStub(), ensureSession: async () => session } as unknown as BridgeSessionFlow;
+  for (const command of ["/goal 工作", "/goal pause", "/goal resume", "/goal clear"]) {
+    await handleGoalCommand({ ...fixture, sessionFlow: flow }, message(), target(), command);
+  }
+  assert.deepEqual(origins, ["user", "user", "user", "user"]);
+});
 
 test("goal command clears stale bindings when Codex thread history is missing", async () => {
   const fixture = commandFixture(new StaleGoalCodexAdapter());

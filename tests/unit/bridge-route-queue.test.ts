@@ -17,6 +17,54 @@ import type { ChannelMessage, ChannelTarget } from "../../src/protocol/channel.j
 import { DEFAULT_CHANNEL_DELIVERY_POLICY, type ChannelDeliveryPolicy } from "../../src/protocol/delivery-policy.js";
 import { MemoryStateStore } from "../../src/state/memory-state-store.js";
 import { SessionBindings } from "../../src/state/session-bindings.js";
+import { BridgeBackgroundTurns } from "../../src/bridge/background-turns.js";
+
+test("foreground sends partial answers and async questions before final even with silent progress", async () => {
+  class IntermediateAdapter extends MockCodexAdapter {
+    verify: () => void = () => undefined;
+    override async *run(sessionId: string): AsyncIterable<CodexEvent> {
+      const turnId = "t";
+      yield { type: "turn.started", sessionId, turnId };
+      yield { type: "assistant.message", sessionId, turnId, message: { itemId: "p", phase: "partial_answer", text: "阶段答案" } };
+      yield { type: "assistant.message", sessionId, turnId, message: { itemId: "q", delivery: "async", text: "", questions: [{ title: "环境？", options: ["开发", "生产"] }] } };
+      this.verify();
+      yield { type: "assistant.completed", sessionId, turnId, text: "最终答案" };
+      yield { type: "turn.completed", sessionId, turnId };
+    }
+  }
+  const codex = new IntermediateAdapter();
+  const fixture = routeQueueFixture({ codex, shouldDeliverProgress: false });
+  codex.verify = () => {
+    assert.ok(fixture.sentTexts.includes("阶段答案"));
+    assert.ok(fixture.sentTexts.some((text) => text.includes("环境？") && text.includes("1. 开发")));
+    assert.equal(fixture.sentTexts.includes("最终答案"), false);
+  };
+  await fixture.queue.enqueuePrompt(message("route-a", "执行"), target("route-a"), "执行");
+  await fixture.queue.waitForWorkers();
+  assert.equal(fixture.sentTexts.filter((text) => text === "最终答案").length, 1);
+});
+
+test("background sends intermediate messages immediately without replacing its final", async () => {
+  const fixture = routeQueueFixture({ shouldDeliverProgress: false });
+  fixture.state.bindSession("route-a", { id: "s", cwd: "/repo", createdAt: "now" });
+  const background = new BridgeBackgroundTurns({
+    state: fixture.state, approvals: fixture.approvals, delivery: fixture.delivery, logger: new SilentLogger(),
+    routeMessages: new Map([["route-a", message("route-a", "执行")]]), routeTargets: new Map([["route-a", target("route-a")]]),
+    deliveryPolicyFor: () => DEFAULT_CHANNEL_DELIVERY_POLICY,
+    shouldDeliverProgressWithPolicy: () => false, shouldDeliverCommentaryWithPolicy: () => false,
+    isRealtimeCommentaryWithPolicy: () => false, shouldDeliverToolProgressWithPolicy: () => false,
+    startRouteWorker: () => undefined, routeQueueLength: () => 0, hasRouteWorker: () => false,
+  });
+  const ids = { sessionId: "s", turnId: "t" };
+  await background.handle({ ...ids, type: "turn.started" });
+  await background.handle({ ...ids, type: "assistant.message", message: { phase: "partial_answer", text: "后台阶段答案" } });
+  assert.ok(fixture.sentTexts.includes("后台阶段答案"));
+  assert.equal(background.hasForRoute("route-a"), true);
+  await background.handle({ ...ids, type: "assistant.completed", text: "后台最终答案" });
+  await background.handle({ ...ids, type: "turn.completed" });
+  assert.equal(fixture.sentTexts.filter((text) => text === "后台最终答案").length, 1);
+  assert.equal(background.hasForRoute("route-a"), false);
+});
 
 test("BridgeRouteQueue forwards prompts and sends final replies", async () => {
   const fixture = routeQueueFixture();
@@ -27,6 +75,23 @@ test("BridgeRouteQueue forwards prompts and sends final replies", async () => {
   assert.equal(fixture.codex.runs[0]?.prompt, "你好");
   assert.ok(fixture.sentTexts.some((text) => text.includes("Codex 正在处理这条消息。")));
   assert.ok(fixture.sentTexts.some((text) => text.includes("Mock Codex 回复: 你好")));
+});
+
+test("interrupted foreground turns discard buffered final and present interruption", async () => {
+  class InterruptedAdapter extends MockCodexAdapter {
+    override async *run(sessionId: string): AsyncIterable<CodexEvent> {
+      const turnId = "t";
+      yield { type: "turn.started", sessionId, turnId };
+      yield { type: "turn.retrying", sessionId, turnId, error: "temporary" };
+      yield { type: "assistant.completed", sessionId, turnId, text: "未完成正文" };
+      yield { type: "turn.interrupted", sessionId, turnId };
+    }
+  }
+  const fixture = routeQueueFixture({ codex: new InterruptedAdapter(), shouldDeliverProgress: false });
+  await fixture.queue.enqueuePrompt(message("route-a", "执行"), target("route-a"), "执行");
+  await fixture.queue.waitForWorkers();
+  assert.equal(fixture.sentTexts.includes("未完成正文"), false);
+  assert.ok(fixture.sentTexts.includes("Codex 当前任务已中断。"));
 });
 
 test("BridgeRouteQueue clears chat approvals when app-server resolves request", async () => {
@@ -323,6 +388,7 @@ function routeQueueFixture(options: {
   });
   return {
     codex,
+    delivery,
     state,
     approvals,
     queue,

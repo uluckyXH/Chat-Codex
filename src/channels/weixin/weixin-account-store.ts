@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { weixinQuoteAccountDir } from "./weixin-quote-store.js";
 
 export interface StoredWeixinAccount {
   accountId: string;
@@ -25,6 +26,8 @@ export class FileWeixinAccountStore implements WeixinAccountStore {
   constructor(rootDir = path.join(process.cwd(), "state", "weixin")) {
     this.rootDir = rootDir;
   }
+
+  getStateDir(): string { return this.rootDir; }
 
   listAccountIds(): string[] {
     const indexPath = this.indexPath();
@@ -67,6 +70,7 @@ export class FileWeixinAccountStore implements WeixinAccountStore {
     if (removedIds.length === 0) return false;
     for (const id of removedIds) {
       fs.rmSync(this.accountPath(id), { force: true });
+      fs.rmSync(weixinQuoteAccountDir(this.rootDir, id), { recursive: true, force: true });
     }
     const remainingIds = ids.filter((id) => !removedIds.includes(id));
     fs.mkdirSync(this.rootDir, { recursive: true });

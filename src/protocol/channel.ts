@@ -57,9 +57,20 @@ export interface ChannelMessage {
   sender: ChannelPeer;
   conversation: ChannelConversation;
   text?: string;
+  /** Historical content, kept separate so it cannot become a chat command or answer. */
+  quotedMessage?: { messageId?: string; text: string; selectedText?: string };
+  /** Content-free diagnostics for local logs, not part of the model's quoted context. */
+  quoteDiagnostics?: ChannelQuoteDiagnostics;
   attachments?: ChannelAttachment[];
   timestamp: string;
   raw?: unknown;
+}
+
+export interface ChannelQuoteDiagnostics {
+  source: "inline" | "cache" | "unavailable";
+  cache: "not-needed" | "hit" | "miss" | "disabled" | "unavailable" | "not-configured" | "missing-id";
+  selection: "none" | "restored" | "fallback" | "unavailable";
+  media: "none" | "available" | "unavailable";
 }
 
 export type ChannelApprovalDecision = "approve" | "approve-session" | "deny" | "cancel";
@@ -160,6 +171,7 @@ export interface SendOptions {
 export interface SendResult {
   channelId: string;
   messageId: string;
+  serverMessageId?: string;
   deliveredAt: string;
   raw?: unknown;
 }

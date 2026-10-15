@@ -1,5 +1,6 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
 import { randomUUID } from "node:crypto";
+import { formatAssistantMessage } from "./assistant-message.js";
 import type { CodexEvent, CodexProgressKind, CodexSessionStatus, CodexTransportDiagnostic } from "../codex/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
@@ -158,7 +159,7 @@ export class BridgeBackgroundTurns {
       });
       if (!existingState) this.turns.delete(event.turnId);
     } else if (event.type === "input.requested") {
-      this.state.setSessionStatus(event.sessionId, {
+      if (event.request.isBlocking !== false) this.state.setSessionStatus(event.sessionId, {
         type: "waiting_input",
         detail: "Codex 等待用户输入",
         startedAt: currentStartedAt(this.state.getSession(event.sessionId)?.status),
@@ -171,7 +172,7 @@ export class BridgeBackgroundTurns {
       });
     } else if (event.type === "input.resolved") {
       await this.pendingInput?.handleResolved(state.routeKey, event.adapterRequestId);
-      this.state.setSessionStatus(event.sessionId, {
+      if (!this.pendingInput?.has(state.routeKey) && !this.approvals.list(state.routeKey).length) this.state.setSessionStatus(event.sessionId, {
         type: "running",
         turnId: event.turnId,
         task: "Goal 自动续跑",
@@ -179,8 +180,10 @@ export class BridgeBackgroundTurns {
       });
     } else if (event.type === "assistant.plan") {
       state.finalPlanText = event.text;
+    } else if (event.type === "assistant.message") {
+      await this.delivery.sendText(state.target, formatAssistantMessage(event.message));
     } else if (event.type === "assistant.delta") {
-      state.finalText += event.text;
+      state.finalText = event.snapshot ?? (state.finalText + event.text);
     } else if (event.type === "assistant.completed") {
       state.finalText = event.text;
     } else if (event.type === "approval.requested") {
@@ -204,10 +207,19 @@ export class BridgeBackgroundTurns {
         startedAt: currentStartedAt(this.state.getSession(event.sessionId)?.status),
       });
     } else if (event.type === "turn.completed") {
+      this.pendingInput?.clearTurn(state.routeKey, event.sessionId, event.turnId);
       if (!isTerminalLifecycleStatus(this.state.getSession(event.sessionId)?.status)) {
         this.state.setSessionStatus(event.sessionId, { type: "idle" });
       }
       await this.finishTurn(event.turnId, state);
+    } else if (event.type === "turn.retrying") {
+      await this.progressDelivery.handleProgress({ routeKey: state.routeKey, target: state.target, policy: deliveryPolicy, text: `Codex 正在重试: ${event.error}`, kind: "other" });
+    } else if (event.type === "turn.interrupted") {
+      this.approvals.cancelTurn(state.routeKey, event.sessionId, event.turnId, "Codex 当前任务已中断。");
+      this.pendingInput?.clearTurn(state.routeKey, event.sessionId, event.turnId);
+      this.state.setSessionStatus(event.sessionId, { type: "interrupted" });
+      await this.delivery.sendText(state.target, "Codex 当前任务已中断。");
+      await this.finishTurn(event.turnId, state, false);
     } else if (event.type === "turn.failed") {
       this.approvals.cancelTurn(
         state.routeKey,

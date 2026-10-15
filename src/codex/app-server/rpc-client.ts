@@ -1,5 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
+import { chatCodexVersion } from "../../runtime/package-info.js";
+import { protocolStatus, type CodexProtocolStatus } from "./compatibility.js";
 import type { Interface as ReadlineInterface } from "node:readline";
 import { resolveCodexCommand, spawnCodex, type CodexCommandResolution } from "../codex-process.js";
 import type {
@@ -38,6 +40,8 @@ export class AppServerRpcClient {
   private processGeneration = 0;
   private fatalGeneration?: number;
   private lastTransportDiagnostic?: CodexTransportDiagnostic;
+  private handshakeComplete = false;
+  private serverUserAgent?: string;
 
   constructor(options: AppServerRpcClientOptions) {
     this.codexCommand = typeof options.codexBin === "string" ? resolveCodexCommand({ codexBin: options.codexBin }) : options.codexBin;
@@ -56,7 +60,16 @@ export class AppServerRpcClient {
     return this.lastTransportDiagnostic;
   }
 
+  getProtocolStatus(): CodexProtocolStatus {
+    return protocolStatus(this.serverUserAgent, this.handshakeComplete && Boolean(this.child));
+  }
+
+  serverRequestKey(id: string | number): string {
+    return `rpc-${this.processGeneration}:${id}`;
+  }
+
   stop(): void {
+    this.handshakeComplete = false;
     this.stopping = true;
     this.processGeneration += 1;
     this.fatalGeneration = undefined;
@@ -131,6 +144,8 @@ export class AppServerRpcClient {
   }
 
   private async startProcessAndInitialize(): Promise<void> {
+    this.handshakeComplete = false;
+    this.serverUserAgent = undefined;
     this.stopping = false;
     const generation = ++this.processGeneration;
     this.fatalGeneration = undefined;
@@ -160,11 +175,11 @@ export class AppServerRpcClient {
     const stdoutLines = createInterface({ input: stdout });
     this.stdoutLines = stdoutLines;
     void this.readLoop(generation, stdoutLines);
-    await this.request("initialize", {
+    const response = await this.request<{ userAgent?: string }>("initialize", {
       clientInfo: {
         name: "codex-chat-bridge",
         title: "Codex Chat Bridge",
-        version: "0.1.0",
+        version: chatCodexVersion(),
       },
       capabilities: {
         experimentalApi: true,
@@ -176,6 +191,8 @@ export class AppServerRpcClient {
       },
     });
     this.writeMessage({ method: "initialized" });
+    this.serverUserAgent = typeof response.userAgent === "string" ? response.userAgent : undefined;
+    this.handshakeComplete = true;
   }
 
   private handleProcessExit(generation: number, code: number | null, signal: NodeJS.Signals | null): void {

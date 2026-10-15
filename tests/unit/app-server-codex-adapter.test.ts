@@ -553,7 +553,7 @@ test("AppServerCodexAdapter routes command approvals through resolveApproval", a
     if (event.type === "approval.requested") {
       assert.equal(event.approval.kind, "command");
       assert.equal(event.approval.command, "touch approved.txt");
-      assert.equal(event.approval.adapterApprovalId, "approval-1");
+      assert.equal(event.approval.adapterApprovalId, "rpc-1:approval-1");
       await adapter.resolveApproval(event.approval.adapterApprovalId, "approve");
     }
   }
@@ -579,7 +579,7 @@ test("AppServerCodexAdapter maps writeStdin /NO semantics to cancel without trea
     events.push(event);
     if (event.type === "approval.requested") {
       assert.equal(event.approval.kind, "terminal_input");
-      assert.equal(event.approval.adapterApprovalId, "stdin-approval-1");
+      assert.equal(event.approval.adapterApprovalId, "rpc-1:stdin-approval-1");
       assert.equal(event.approval.itemId, "original-command-item-1");
       assert.equal(event.approval.command, "write_stdin --session-id 42 'confirm\n'");
       assert.equal(event.approval.environmentId, "remote");
@@ -629,7 +629,7 @@ test("AppServerCodexAdapter resolves request_user_input through bridge answers",
   for await (const event of adapter.run(session.id, "request user input supported")) {
     events.push(event);
     if (event.type === "input.requested") {
-      assert.equal(event.request.adapterRequestId, "input-1");
+      assert.equal(event.request.adapterRequestId, "rpc-1:input-1");
       assert.equal(event.request.questions[0]?.id, "confirm_path");
       assert.equal(event.request.questions[0]?.options[1]?.label, "No");
       await adapter.resolveUserInput(event.request.adapterRequestId, {
@@ -642,7 +642,7 @@ test("AppServerCodexAdapter resolves request_user_input through bridge answers",
   await adapter.stop();
 
   assert.ok(events.some((event) => event.type === "input.requested"));
-  assert.ok(events.some((event) => event.type === "input.resolved" && event.adapterRequestId === "input-1"));
+  assert.ok(events.some((event) => event.type === "input.resolved" && event.adapterRequestId === "rpc-1:input-1"));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "input answer No|user_note: 先别继续"));
   await assert.rejects(() => adapter.resolveUserInput("input-1", { answers: {} }), /未找到/);
 });
@@ -687,8 +687,8 @@ test("AppServerCodexAdapter clears pending approvals when app-server resolves re
   }
   await adapter.stop();
 
-  assert.ok(events.some((event) => event.type === "approval.requested" && event.approval.adapterApprovalId === "approval-external"));
-  assert.ok(events.some((event) => event.type === "approval.resolved" && event.adapterApprovalId === "approval-external"));
+  assert.ok(events.some((event) => event.type === "approval.requested" && event.approval.adapterApprovalId === "rpc-1:approval-external"));
+  assert.ok(events.some((event) => event.type === "approval.resolved" && event.adapterApprovalId === "rpc-1:approval-external"));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "external resolved done"));
   await assert.rejects(() => adapter.resolveApproval("approval-external", "approve"), /未找到/);
 });
@@ -842,7 +842,7 @@ test("AppServerCodexAdapter cancels pending approvals when interrupting a turn",
   await adapter.stop();
 
   assert.ok(events.some((event) => event.type === "approval.requested"));
-  assert.ok(events.some((event) => event.type === "turn.completed"));
+  assert.ok(events.some((event) => event.type === "turn.interrupted"));
   assert.equal(events.some((event) => event.type === "turn.failed"), false);
 });
 
@@ -865,7 +865,7 @@ test("AppServerCodexAdapter cancel does not wait for app-server interrupt respon
   await adapter.stop();
 
   assert.ok(events.some((event) => event.type === "turn.started"));
-  assert.ok(events.some((event) => event.type === "turn.completed"));
+  assert.ok(events.some((event) => event.type === "turn.interrupted"));
   assert.equal(events.some((event) => event.type === "turn.failed"), false);
 });
 
@@ -1257,7 +1257,7 @@ test("AppServerCodexAdapter scopes run policy per session", async () => {
 
   assert.equal(adapter.getRunPolicy(first.id).permissionMode, "approve-for-me");
   assert.equal(adapter.getRunPolicyStatus(first.id).effectiveApprovalPolicy, "on-request");
-  assert.equal(adapter.getRunPolicyStatus(first.id).effectiveApprovalsReviewer, "auto_review");
+  assert.equal(adapter.getRunPolicyStatus(first.id).effectiveApprovalsReviewer, "user"); // Last server-confirmed setting, before the next turn.
   assert.equal(adapter.getRunPolicy(second.id).permissionMode, "approval");
   assert.equal(adapter.getRunPolicyStatus(second.id).effectiveApprovalPolicy, "on-request");
   assert.equal(adapter.getRunPolicy().permissionMode, "approval");
@@ -1298,8 +1298,8 @@ test("AppServerCodexAdapter sends model policy on turn start", async () => {
   await adapter.stop();
 
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "model fake-next effort xhigh"));
-  assert.equal(status.model?.model, "fake-next");
-  assert.equal(status.model?.reasoningEffort, "xhigh");
+  assert.equal(status.model?.model, "fake"); // Fake server has not confirmed the requested model yet.
+  assert.equal(status.model?.reasoningEffort, "medium");
   assert.deepEqual(adapter.getModelPolicy(session.id), { model: "fake-next", reasoningEffort: "xhigh" });
 });
 

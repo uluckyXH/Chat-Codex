@@ -36,17 +36,18 @@ export function modelInfoFromResponse(
   response: Record<string, unknown>,
   thread: Record<string, unknown>,
 ): CodexSessionModelInfo | undefined {
-  const model = stringValue(response.model);
+  const model = stringValue(response.model) ?? stringValue(thread.model);
   const provider = stringValue(response.modelProvider) ?? stringValue(thread.modelProvider);
-  const serviceTier = stringValue(response.serviceTier) ?? null;
+  const serviceTier = hasValue(response, "serviceTier") ? stringValue(response.serviceTier) ?? null
+    : hasValue(thread, "serviceTier") ? stringValue(thread.serviceTier) ?? null : undefined;
   const reasoningEffort = Object.prototype.hasOwnProperty.call(response, "reasoningEffort")
     ? stringValue(response.reasoningEffort) ?? null
-    : undefined;
-  if (!model && !provider && !serviceTier && reasoningEffort === undefined) return undefined;
+    : hasValue(thread, "reasoningEffort") ? stringValue(thread.reasoningEffort) ?? null : undefined;
+  if (!model && !provider && serviceTier === undefined && reasoningEffort === undefined) return undefined;
   return {
     ...(model ? { model } : {}),
     ...(provider ? { provider } : {}),
-    ...(serviceTier ? { serviceTier } : {}),
+    ...(serviceTier !== undefined ? { serviceTier } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
   };
 }
@@ -104,12 +105,15 @@ function modelOptionFromValue(value: unknown): CodexModelOption | undefined {
     ...(upgrade !== undefined ? { upgrade } : {}),
     ...(upgradeInfo !== undefined ? { upgradeInfo } : {}),
     ...(availabilityNux !== undefined ? { availabilityNux } : {}),
+    ...(hasValue(object, "modelSpecialty") ? { modelSpecialty: stringValue(object.modelSpecialty) ?? null } : {}),
+    ...(hasValue(object, "multiAgentVersion") ? { multiAgentVersion: stringValue(object.multiAgentVersion) ?? null } : {}),
+    ...(hasValue(object, "availableAccessPrograms") ? { availableAccessPrograms: object.availableAccessPrograms == null ? null : objectValue(object.availableAccessPrograms) } : {}),
     hidden: object.hidden === true,
     supportedReasoningEfforts,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(inputModalities.length > 0 ? { inputModalities } : {}),
     ...(supportsPersonality !== undefined ? { supportsPersonality } : {}),
-    ...(serviceTiers.length > 0 ? { serviceTiers } : {}),
+    ...(hasValue(object, "serviceTiers") || hasValue(object, "service_tiers") ? { serviceTiers } : {}),
     ...(defaultServiceTier !== undefined ? { defaultServiceTier } : {}),
     ...(typeof object.isDefault === "boolean" ? { isDefault: object.isDefault } : {}),
   };

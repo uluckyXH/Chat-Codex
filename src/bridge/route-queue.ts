@@ -1,5 +1,6 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
 import { randomUUID } from "node:crypto";
+import { formatAssistantMessage } from "./assistant-message.js";
 import { isInvalidCwdError } from "../codex/cwd-diagnostic.js";
 import type { CodexAdapter, CodexCollaborationMode, CodexProgressKind, CodexPromptInput, CodexSessionStatus } from "../codex/types.js";
 import { codexInputPlainText, codexInputText, withCodexInputText } from "../codex/input.js";
@@ -332,7 +333,7 @@ export class BridgeRouteQueue {
                 event,
               });
             } else if (event.type === "input.requested") {
-              this.state.setSessionStatus(session.id, {
+              if (event.request.isBlocking !== false) this.state.setSessionStatus(session.id, {
                 type: "waiting_input",
                 detail: "Codex 等待用户输入",
                 startedAt: currentTurnStartedAt,
@@ -345,7 +346,7 @@ export class BridgeRouteQueue {
               });
             } else if (event.type === "input.resolved") {
               await this.pendingInput?.handleResolved(message.routeKey, event.adapterRequestId);
-              this.state.setSessionStatus(session.id, {
+              if (!this.pendingInput?.has(message.routeKey) && !this.approvals.list(message.routeKey).length) this.state.setSessionStatus(session.id, {
                 type: "running",
                 turnId: event.turnId,
                 task: truncateForChannel(promptText || codexInputPlainText(prompt), 120),
@@ -353,8 +354,10 @@ export class BridgeRouteQueue {
               });
             } else if (event.type === "assistant.plan") {
               finalPlanText = event.text;
+            } else if (event.type === "assistant.message") {
+              await this.delivery.sendText(target, formatAssistantMessage(event.message));
             } else if (event.type === "assistant.delta") {
-              finalText += event.text;
+              finalText = event.snapshot ?? (finalText + event.text);
             } else if (event.type === "assistant.completed") {
               finalText = event.text;
             } else if (event.type === "approval.requested") {
@@ -378,9 +381,18 @@ export class BridgeRouteQueue {
                 startedAt: currentTurnStartedAt,
               });
             } else if (event.type === "turn.completed") {
+              this.pendingInput?.clearTurn(message.routeKey, event.sessionId, event.turnId);
               if (!isTerminalLifecycleStatus(this.state.getSession(session.id)?.status)) {
                 this.state.setSessionStatus(session.id, { type: "idle" });
               }
+            } else if (event.type === "turn.retrying") {
+              await this.progressDelivery.handleProgress({ routeKey: message.routeKey, target, policy: deliveryPolicy, text: `Codex 正在重试: ${event.error}`, kind: "other" });
+            } else if (event.type === "turn.interrupted") {
+              turnFailed = true;
+              this.approvals.cancelTurn(message.routeKey, event.sessionId, event.turnId, "Codex 当前任务已中断。");
+              this.pendingInput?.clearTurn(message.routeKey, event.sessionId, event.turnId);
+              this.state.setSessionStatus(session.id, { type: "interrupted" });
+              await this.delivery.sendText(target, "Codex 当前任务已中断。");
             } else if (event.type === "turn.failed") {
               turnFailed = true;
               this.approvals.cancelTurn(

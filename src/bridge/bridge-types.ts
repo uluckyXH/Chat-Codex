@@ -108,6 +108,7 @@ export interface SessionListItem {
 }
 
 export interface SessionListState {
+  notice?: string;
   scope: SessionListScope;
   page: number;
   pageSize: number;
@@ -116,6 +117,7 @@ export interface SessionListState {
 }
 
 export interface SessionSelectionState {
+  notice?: string;
   items: SessionListItem[];
   page: number;
   pageSize: number;
@@ -133,6 +135,7 @@ export interface SessionDirectoryItem {
 }
 
 export interface SessionCwdSelectionState {
+  notice?: string;
   stage: "cwd" | "session";
   items: SessionListItem[];
   directories: SessionDirectoryItem[];
