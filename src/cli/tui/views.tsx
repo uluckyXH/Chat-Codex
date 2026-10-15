@@ -171,6 +171,7 @@ export function ChannelDetailView({ channel, selected }: { channel?: LauncherDas
         channel.record.enabled ? "停用这个渠道" : "启用这个渠道",
         "删除这个渠道",
         "状态详情",
+        ...(channel.record.type === "feishu" || channel.record.type === "lark" ? [channel.record.capabilityOverrides?.group ? "关闭群聊接收" : "开启群聊接收"] : []),
       ];
   return (
     <Frame title="渠道详情" subtitle="Enter 执行  e 启停  Esc 返回">
@@ -324,7 +325,7 @@ export function BindingsView({ bindings, pendingBindings, selected }: { bindings
   );
 }
 
-export function BindingDetailView({ binding, selected }: { binding?: BindingSummary; selected: number }): React.JSX.Element {
+export function BindingDetailView({ binding, selected, groupManagement = false }: { binding?: BindingSummary; selected: number; groupManagement?: boolean }): React.JSX.Element {
   if (!binding) return <Frame title="绑定详情"><Muted text="这个聊天记录已经不存在。" /></Frame>;
   if (binding.trusted === false) {
     return (
@@ -348,6 +349,7 @@ export function BindingDetailView({ binding, selected }: { binding?: BindingSumm
     binding.activeSession ? "设置当前 session 权限" : "设置当前 session 权限（请先绑定 session）",
     "设置上下文刷新",
     binding.activeSession ? "解绑当前 session" : "解绑当前 session（当前未绑定）",
+    ...(groupManagement ? ["群权限管理（管理员 / 黑名单 / 审批）"] : []),
   ];
   return (
     <Frame title="绑定详情" subtitle="Enter 执行  Esc 返回">

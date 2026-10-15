@@ -1,7 +1,7 @@
 import type { ChannelMessage, ChannelTarget } from "../../protocol/channel.js";
 import type { BridgeDelivery } from "../delivery.js";
 import type { BridgeRouteQueue } from "../route-queue.js";
-import { commandBody } from "../formatters.js";
+import { commandBody, withGroupConversationPromptPrefix } from "../formatters.js";
 
 export interface SendFileCommandOptions {
   delivery: BridgeDelivery;
@@ -22,5 +22,5 @@ export async function handleSendFileCommand(
     ].join("\n"));
     return;
   }
-  await options.routeQueue.enqueuePrompt(message, target, prompt, { sendFile: true });
+  await options.routeQueue.enqueuePrompt(message, target, message.groupPolicy === "feishu" ? withGroupConversationPromptPrefix(message, prompt, "say") : prompt, { sendFile: true });
 }

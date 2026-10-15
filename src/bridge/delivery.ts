@@ -10,6 +10,8 @@ import { PROGRESS_SEND_FAILURE_COOLDOWN_MS, SEND_FILE_MAX_FILES } from "./bridge
 import { sleep } from "./formatters.js";
 
 export interface BridgeDeliveryOptions {
+  authorizeMedia?(target: ChannelTarget): boolean;
+  auditMedia?(target: ChannelTarget, media: ChannelMedia, outcome: "allowed" | "denied" | "failed", messageId?: string): void;
   channels: ChannelRegistry;
   approvals: ApprovalManager;
   logger: Logger;
@@ -18,6 +20,8 @@ export interface BridgeDeliveryOptions {
 }
 
 export class BridgeDelivery {
+  private readonly authorizeMedia?: BridgeDeliveryOptions["authorizeMedia"];
+  private readonly auditMedia?: BridgeDeliveryOptions["auditMedia"];
   private readonly channels: ChannelRegistry;
   private readonly approvals: ApprovalManager;
   private readonly logger: Logger;
@@ -32,6 +36,8 @@ export class BridgeDelivery {
 
   constructor(options: BridgeDeliveryOptions) {
     this.channels = options.channels;
+    this.authorizeMedia = options.authorizeMedia;
+    this.auditMedia = options.auditMedia;
     this.approvals = options.approvals;
     this.logger = options.logger;
     this.transcript = options.transcript;
@@ -55,12 +61,13 @@ export class BridgeDelivery {
   }
 
   async sendApprovalUntilDelivered(routeKey: string, target: ChannelTarget, pending: PendingApproval): Promise<void> {
-    const text = this.approvals.formatForChannel(pending);
+    const group = target.conversation.kind === "group" && this.channels.get(target.channelId)?.groupPolicy === "feishu";
+    const text = group ? this.approvals.formatForGroup(pending) : this.approvals.formatForChannel(pending);
     const approvalRequest = channelApprovalRequestFromPending(pending);
     let failures = 0;
     while (this.isApprovalStillPending(routeKey, pending.approvalKey)) {
       const cardCapable = Boolean(
-        approvalRequest.availableDecisions.length > 0
+        !group && approvalRequest.availableDecisions.length > 0
         && this.channels.get?.(target.channelId)?.sendApprovalRequest,
       );
       try {
@@ -302,7 +309,7 @@ export class BridgeDelivery {
     const failed: string[] = [];
     for (const media of extraction.media) {
       const delivered = await this.trySendMedia(target, media);
-      if (!delivered) failed.push(media.name ?? media.path ?? media.url ?? "unknown");
+      if (!delivered) failed.push(this.channels.get(target.channelId)?.groupPolicy === "feishu" && target.conversation.kind === "group" ? "文件未发送" : media.name ?? media.path ?? media.url ?? "unknown");
     }
 
     const notes = [
@@ -359,7 +366,19 @@ export class BridgeDelivery {
     return approval?.routeKey === routeKey && approval.status === "pending";
   }
 
+  private recordMediaAudit(target: ChannelTarget, media: ChannelMedia, outcome: "allowed" | "denied" | "failed", messageId?: string): void {
+    try { this.auditMedia?.(target, media, outcome, messageId); }
+    catch (error) {
+      // Delivery may already have succeeded. An audit failure must not claim the remote send failed.
+      this.logger.error("group file audit persistence failed", { routeKey: target.routeKey, messageId, outcome, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   private async trySendMedia(target: ChannelTarget, media: ChannelMedia): Promise<boolean> {
+    if (this.authorizeMedia && !this.authorizeMedia(target)) {
+      this.recordMediaAudit(target, media, "denied");
+      return false;
+    }
     const capabilities = this.channels.getCapabilities(target.channelId);
     if (!capabilities.media) {
       this.logger.warn("channel media send skipped", {
@@ -370,10 +389,14 @@ export class BridgeDelivery {
       return false;
     }
     try {
-      await this.channels.sendMedia(target, media);
+      const result = await this.channels.sendMedia(target, media, { beforeSend: () => {
+        if (this.authorizeMedia && !this.authorizeMedia(target)) throw new Error("文件发送权限已撤销");
+      } });
+      this.recordMediaAudit(target, media, "allowed", result.messageId);
       this.transcript?.outboundMedia?.(target, media);
       return true;
     } catch (error) {
+      this.recordMediaAudit(target, media, "failed");
       this.logger.warn("channel media send failed", {
         ...deliveryLogMeta(target),
         media: media.path ?? media.url ?? media.name,

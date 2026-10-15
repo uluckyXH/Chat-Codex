@@ -166,9 +166,27 @@ export interface GroupRoleRecord {
 }
 
 export type GroupNormalMessagePolicy = "mentioned_non_blocked";
-export type GroupApprovalPolicy = "super_admin_only" | "any_non_blocked";
+export type GroupApprovalPolicy = "super_admin_only" | "admins_only" | "any_non_blocked";
 export type GroupManagementPolicy = "super_admin_only";
 export type GroupBlockedUserBehavior = "silent";
+
+export interface GroupBlock extends GroupPrincipal {
+  blockedByRole?: "super_admin" | "admin" | "local" | "unknown";
+  reason?: string;
+}
+
+export interface GroupAuditEntry {
+  id?: string;
+  actorRole?: string;
+  source?: "local" | "chat";
+  at: string;
+  actor: string;
+  action: string;
+  target?: string;
+  outcome: "allowed" | "denied" | "failed" | "uncertain";
+  revision: number;
+  detail?: string;
+}
 
 export interface GroupAccessRecord {
   routeKey: string;
@@ -177,7 +195,11 @@ export interface GroupAccessRecord {
   conversationKind: "group";
   conversationId: string;
   superAdmin?: GroupPrincipal;
-  blockedSenders: GroupPrincipal[];
+  botSenderId?: string;
+  admins?: GroupPrincipal[];
+  revision?: number;
+  blockedSenders: GroupBlock[];
+  audit?: GroupAuditEntry[];
   knownPrincipals?: KnownGroupPrincipal[];
   normalMessagePolicy: GroupNormalMessagePolicy;
   approvalPolicy: GroupApprovalPolicy;

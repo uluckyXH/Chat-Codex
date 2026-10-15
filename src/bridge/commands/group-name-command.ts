@@ -96,7 +96,7 @@ export function feishuGroupMemberRefFromMessage(message: ChannelMessage): Feishu
 export function isFeishuGroupMessage(message: ChannelMessage | undefined): boolean {
   return Boolean(message)
     && message?.conversation.kind === "group"
-    && isFeishuChannelId(message.channelId);
+    && message.groupPolicy === "feishu";
 }
 
 export function isFeishuGroupPreTrustCommand(name: string | undefined): boolean {
@@ -115,9 +115,6 @@ export function feishuGroupRegistrationRequiredText(): string {
   ].join("\n");
 }
 
-function isFeishuChannelId(channelId: string): boolean {
-  return channelId === "feishu" || channelId.startsWith("feishu-") || channelId === "lark" || channelId.startsWith("lark-");
-}
 
 function maskIdentifier(value: string): string {
   if (value.length <= 12) return value;
@@ -127,6 +124,7 @@ function maskIdentifier(value: string): string {
 function formatGroupRole(role: ReturnType<typeof groupSenderRole>, trusted: boolean): string {
   if (!trusted) return "未配对";
   if (role === "super_admin") return "超级管理员";
+  if (role === "admin") return "管理员";
   if (role === "blocked") return "小黑屋";
   if (role === "unconfigured") return "未初始化";
   return "普通成员";
@@ -135,5 +133,5 @@ function formatGroupRole(role: ReturnType<typeof groupSenderRole>, trusted: bool
 function formatApprovalPolicy(policy: string | undefined): string {
   if (!policy) return "未初始化";
   if (policy === "any_non_blocked") return "开放审批";
-  return "仅超级管理员";
+  return "超管和管理员";
 }

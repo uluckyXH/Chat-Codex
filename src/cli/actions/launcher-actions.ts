@@ -1,3 +1,5 @@
+import { GroupAccessService, type GroupMutation } from "../../group-access/service.js";
+import { groupWriterBusy, assertGroupWriter } from "../../group-access/writer-lock.js";
 import { FeishuAdapter } from "../../channels/feishu/feishu-adapter.js";
 import {
   DEFAULT_FEISHU_DOMAIN,
@@ -159,6 +161,7 @@ export class LauncherActions {
   }
 
   async setChannelGroupEnabled(channelId: string, enabled: boolean): Promise<ManagedChannelSummary | undefined> {
+    assertGroupWriter(this.channelActions.configStore.bridgeDir);
     const updated = this.channelActions.setChannelGroupEnabled(channelId, enabled);
     if (!updated) return undefined;
     return (await this.listChannels()).find((channel) => channel.record.id === channelId);
@@ -286,6 +289,30 @@ export class LauncherActions {
     return this.bindingActions().unbindSession(routeKey);
   }
 
+  supportsGroupManagement(routeKey: string): boolean {
+    const route = this.stateStore().getRouteRecord(routeKey);
+    const channel = this.channelActions.listChannelInstances().find((c) => c.id === route?.channelId);
+    return route?.conversationKind === "group" && (channel?.type === "feishu" || channel?.type === "lark");
+  }
+
+  getGroupManagement(routeKey: string) {
+    const state = this.stateStore();
+    return { record: state.getGroupAccess(routeKey), readOnly: groupWriterBusy(state.rootDir), error: state.getGroupAccessError(), trusted: state.isRouteTrusted(routeKey) };
+  }
+
+  updateGroupManagement(routeKey: string, change: GroupMutation, expectedRevision?: number) {
+    if (!this.supportsGroupManagement(routeKey)) throw new Error("仅已配置的飞书群支持此操作。");
+    const state = this.stateStore();
+    const release = state.acquireGroupAccessWriter();
+    try {
+      const trusted = state.getTrustedRoute(routeKey);
+      if (!trusted) throw new Error("请先完成群配对。");
+      const service = new GroupAccessService({ state });
+      service.ensureForTrustedRoute(trusted);
+      return service.mutate(routeKey, { kind: "local" }, change, expectedRevision);
+    } finally { release(); }
+  }
+
   getPairingRoute(routeKey: string): PairingRouteSummary | undefined {
     const state = this.stateStore();
     return this.pairingSummary(state, this.bindingActions().listBindings()).routes.find((route) => route.route.routeKey === routeKey);
@@ -293,6 +320,7 @@ export class LauncherActions {
 
   trustRouteManually(routeKey: string): PairingManageResult {
     try {
+      if (this.supportsGroupManagement(routeKey)) assertGroupWriter(this.channelActions.configStore.bridgeDir);
       const state = this.stateStore();
       const route = state.listRoutes().find((item) => item.routeKey === routeKey);
       if (!route) {
@@ -328,6 +356,7 @@ export class LauncherActions {
 
   revokeRouteTrust(routeKey: string, options: { unbindSession?: boolean } = {}): PairingManageResult {
     try {
+      if (this.supportsGroupManagement(routeKey)) assertGroupWriter(this.channelActions.configStore.bridgeDir);
       const state = this.stateStore();
       const route = state.listRoutes().find((item) => item.routeKey === routeKey);
       const removed = state.revokeRouteTrust(routeKey);

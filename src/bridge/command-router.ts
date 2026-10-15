@@ -40,6 +40,7 @@ export interface BridgeCommandHandlers {
 }
 
 export interface BridgeCommandRouterOptions {
+  authorizeCommand?(message: ChannelMessage, name: string): { allowed: boolean; text?: string };
   logger: Logger;
   delivery: BridgeDelivery;
   deliveryPolicyFor(message: ChannelMessage | undefined): ChannelDeliveryPolicy;
@@ -53,6 +54,7 @@ export class BridgeCommandRouter {
   private readonly deliveryPolicyFor: BridgeCommandRouterOptions["deliveryPolicyFor"];
   private readonly isRouteExecutionBusy: BridgeCommandRouterOptions["isRouteExecutionBusy"];
   private readonly handlers: BridgeCommandHandlers;
+  private readonly authorizeCommand?: BridgeCommandRouterOptions["authorizeCommand"];
 
   constructor(options: BridgeCommandRouterOptions) {
     this.logger = options.logger;
@@ -60,6 +62,7 @@ export class BridgeCommandRouter {
     this.deliveryPolicyFor = options.deliveryPolicyFor;
     this.isRouteExecutionBusy = options.isRouteExecutionBusy;
     this.handlers = options.handlers;
+    this.authorizeCommand = options.authorizeCommand;
   }
 
   async handle(
@@ -84,6 +87,12 @@ export class BridgeCommandRouter {
     }
     if (isRouteBusyMutationCommand(name, args, rawText) && await this.isRouteExecutionBusy(message.routeKey)) {
       await this.delivery.sendText(target, ROUTE_BUSY_MUTATION_REJECT_TEXT);
+      return;
+    }
+    // Busy/status lookups above may await; check current authorization at dispatch.
+    const authorization = this.authorizeCommand?.(message, name);
+    if (authorization && !authorization.allowed) {
+      if (authorization.text) await this.delivery.sendText(target, authorization.text);
       return;
     }
     switch (name) {
@@ -172,7 +181,7 @@ export class BridgeCommandRouter {
         return;
       case "ok":
       case "yes":
-        await this.handlers.approval(message, target, [], "approve");
+        await this.handlers.approval(message, target, message.groupPolicy === "feishu" ? args : [], "approve");
         return;
       case "p":
       case "yes-session":
@@ -181,7 +190,7 @@ export class BridgeCommandRouter {
         await this.handlers.approval(message, target, args, "approve-session");
         return;
       case "no":
-        await this.handlers.approval(message, target, [], "deny");
+        await this.handlers.approval(message, target, message.groupPolicy === "feishu" ? args : [], "deny");
         return;
       case "approve":
         await this.handlers.approval(message, target, args, "approve");

@@ -167,7 +167,10 @@
   飞书名称展示与群聊名册设计。说明私聊不解析名称、群聊如何按 `chat_id + open_id` 维护手工成员名册，并统一运行日志、TUI 列表和群聊发言人前缀的兜底格式。
 
 - `feishu-group-chat-design.zh-CN.md`
-  飞书群聊接入与权限设计。说明群聊 route、@bot 触发、一次配对、超级管理员/管理员/小黑屋、审批权限、状态持久化和分阶段实施边界。
+  飞书群聊接入、管理员与黑名单当前设计（2026-10-15 已实现，自动化验证已完成，真实租户验收待执行）。明确每群唯一超管、多名普通管理员；管理员可审批、发文件、拉黑／解禁普通成员，不能操作超管、其他管理员或自己。覆盖目标层级、封禁来源、撤权复查、群命令和 TUI、审批并发、文件授权、schema 迁移及真实群聊验收；替代早期“管理员只预留”的范围。记录用户授权自主选择实现方式、不机械受旧项目约束限制，并以显式策略接入和其他渠道回归保证兼容性。
+
+- `feishu-group-chat-guide.zh-CN.md`
+  群聊开启、配对、登记、管理员和黑名单命令、本机 TUI、迁移备份及真实群聊验收步骤。证据见 `reports/tests/2026-10-15-feishu-group-implementation.md`。
 
 - `feishu-skills-command-design.zh-CN.md`
   `/feishu` 飞书能力引导与工具适配讨论稿。说明如何把 OpenClaw 飞书插件的 skills 同步为 Chat-Codex 可发布资源，如何通过 `/feishu <任务>` 给 Codex 注入飞书 Skill 索引，以及后续真实 `feishu_*` 工具调用如何按契约、凭证隔离和审批策略逐步适配；当前仍是待讨论状态，尚未进入实现承诺。
@@ -251,7 +254,7 @@ secrets/feishu.local.md
 26. 做 Bridge 核心拆分时读 `bridge-modularization-design.zh-CN.md`，确认备份旧文件、模块边界、分阶段迁移和行为不变验收标准。
 27. 做 app-server adapter 或 serve 入口拆分时读 `large-core-file-modularization-design.zh-CN.md`，确认原文件改名备份、薄入口、新模块边界和逐模块测试要求。
 28. 继续拆 `src/codex/app-server-codex-adapter.ts` 时读 `app-server-codex-adapter-refactor-design.zh-CN.md`，确认当前剩余职责、分阶段模块边界和 app-server targeted 测试要求。
-29. 做飞书运行日志、聊天绑定列表或群聊发言人前缀时读 `feishu-user-name-cache-design.zh-CN.md`，确认私聊 open_id 兜底、群聊手工名册和展示格式。
+29. 做飞书群聊、管理员、小黑屋、群审批或群文件发送时先读 `feishu-group-chat-design.zh-CN.md`；做运行日志、聊天绑定列表或群聊发言人前缀时同时读 `feishu-user-name-cache-design.zh-CN.md`，确认私聊 ID 兜底、群聊手工名册和展示格式。
 30. 做飞书私聊审批卡片、`card.action.trigger` 回调、按钮权限或文本回退时读 `feishu-direct-approval-card-design.zh-CN.md`；若是 Codex `writeStdin` 终端输入审批，再读 `codex-writestdin-channel-adaptation-design.zh-CN.md`。
 31. 做飞书插件版本升级、SDK 更新、卡片、thread 或群聊能力取舍时读 `feishu-plugin-2026.7.9-upgrade-assessment.zh-CN.md`，先区分独立中间件必须适配的协议变化和 OpenClaw runtime 专属能力。
 32. 做 `/feishu` 飞书 skills 引导、skills 同步或后续真实飞书工具调用适配时读 `feishu-skills-command-design.zh-CN.md`。

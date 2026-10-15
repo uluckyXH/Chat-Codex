@@ -148,7 +148,7 @@ test("Ink TUI exposes add channel actions when channels already exist", async ()
   view.unmount();
 });
 
-test("Ink TUI hides Feishu group receive from channel detail for the public release", async () => {
+test("Ink TUI enables Feishu group receive only after confirmation", async () => {
   const dashboard = dashboardFixture();
   const toggles: Array<{ channelId: string; enabled: boolean }> = [];
   const view = render(<ChatCodexTui actions={mockActions(dashboard, {
@@ -172,12 +172,16 @@ test("Ink TUI hides Feishu group receive from channel detail for the public rele
   await waitForInk();
   assert.match(cleanFrame(view), /渠道详情/);
   assert.doesNotMatch(cleanFrame(view), /群聊接收\s+关闭/);
-  assert.doesNotMatch(cleanFrame(view), /开启群聊接收/);
+  assert.match(cleanFrame(view), /开启群聊接收/);
 
-  view.stdin.write("g");
+  view.stdin.write("6");
   await waitForInk();
-  assert.doesNotMatch(cleanFrame(view), /确认开启/);
+  assert.match(cleanFrame(view), /确认开启/);
   assert.deepEqual(toggles, []);
+  view.stdin.write("y");
+  await waitForInk();
+  assert.deepEqual(toggles, [{ channelId: dashboard.channels[0].record.id, enabled: true }]);
+  assert.match(cleanFrame(view), /关闭群聊接收/);
 
   view.unmount();
 });
@@ -919,6 +923,7 @@ function mockActions(
     checkWeixinLogin: overrides.checkWeixinLogin ?? (async () => ({ state: "pending", message: "还没有检测到扫码确认。" })),
     cancelWeixinLogin: () => ({ state: "cancelled", message: "已返回管理渠道，未添加微信账号。" }),
     addFeishuBot: overrides.addFeishuBot ?? (async () => ({ ok: true, message: "飞书机器人已添加。" })),
+    supportsGroupManagement: () => false,
     listSessionChoices: overrides.listSessionChoices ?? (() => ({ selectable: [], unavailable: [] })),
     bindExistingSession: overrides.bindExistingSession ?? (() => ({ ok: true, binding: dashboard.bindings[0], session: { id: "session", shortId: "session" } })),
     setChannelGroupEnabled: overrides.setChannelGroupEnabled ?? (async (channelId: string, enabled: boolean) => {

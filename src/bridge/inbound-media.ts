@@ -64,6 +64,16 @@ export class PendingMediaManager {
     };
   }
 
+  removeWhere(routeKey: string, predicate: (attachment: ChannelAttachment) => boolean): number {
+    this.pruneExpired(routeKey);
+    const record = this.pending.get(routeKey);
+    if (!record) return 0;
+    const before = record.attachments.length;
+    record.attachments = record.attachments.filter((a) => !predicate(a));
+    if (!record.attachments.length) this.pending.delete(routeKey);
+    return before - record.attachments.length;
+  }
+
   consume(routeKey: string): ChannelAttachment[] {
     this.pruneExpired(routeKey);
     const attachments = this.pending.get(routeKey)?.attachments ?? [];
@@ -135,13 +145,14 @@ export function codexInputFromTextAndAttachments(text: string, attachments: read
   for (const attachment of attachments) {
     if (!attachment.localPath) continue;
     if (attachment.type === "image") {
-      items.push({ type: "localImage", path: attachment.localPath });
+      items.push({ type: "localImage", path: attachment.localPath, ...(attachment.origin ? { origin: attachment.origin } : {}) });
     } else if (attachment.type === "file") {
       items.push({
         type: "localFile",
         path: attachment.localPath,
         name: attachment.name,
         mimeType: attachment.mimeType,
+        ...(attachment.origin ? { origin: attachment.origin } : {}),
       });
     }
   }

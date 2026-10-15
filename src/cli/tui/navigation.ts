@@ -6,7 +6,10 @@ export function maxSelectableIndex(screen: Screen, channels: LauncherDashboard["
   if (screen.name === "channels") return channels.length > 0 ? channels.length + 6 : 1;
   if (screen.name === "bindings") return Math.max(0, bindingItemCount - 1);
   if (screen.name === "home") return channels.length === 0 ? 5 : 7;
-  if (screen.name === "channelDetail") return 4;
+  if (screen.name === "channelDetail") {
+    const channel = channels.find((c) => c.record.id === screen.channelId);
+    return channel && ["feishu", "lark"].includes(channel.record.type) ? 5 : 4;
+  }
   if (screen.name === "bindingDetail") return 4;
   if (screen.name === "pairingDetail") return 2;
   if (screen.name === "permission") return 2;

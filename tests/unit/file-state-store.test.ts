@@ -185,7 +185,7 @@ test("FileStateStore persists group access records", () => {
       source: "pairing",
     }],
     normalMessagePolicy: "mentioned_non_blocked",
-    approvalPolicy: "super_admin_only",
+    approvalPolicy: "admins_only",
     managementPolicy: "super_admin_only",
     blockedUserBehavior: "silent",
     createdAt: "2026-05-21T00:00:00.000Z",
@@ -194,7 +194,7 @@ test("FileStateStore persists group access records", () => {
 
   const reloaded = new FileStateStore({ rootDir });
   assert.equal(reloaded.getGroupAccess(routeKey)?.superAdmin?.senderId, "ou_admin");
-  assert.equal(reloaded.listGroupAccess()[0]?.approvalPolicy, "super_admin_only");
+  assert.equal(reloaded.listGroupAccess()[0]?.approvalPolicy, "admins_only");
 
   const doc = readJson<GroupAccessDocument>(path.join(rootDir, "group-access.json"));
   assert.equal(doc.groups[0]?.routeKey, routeKey);
@@ -367,7 +367,7 @@ test("FileStateStore removes channel routes and releases active and pending owne
     },
     blockedSenders: [],
     normalMessagePolicy: "mentioned_non_blocked",
-    approvalPolicy: "super_admin_only",
+    approvalPolicy: "admins_only",
     managementPolicy: "super_admin_only",
     blockedUserBehavior: "silent",
     createdAt: "2026-05-21T00:00:00.000Z",

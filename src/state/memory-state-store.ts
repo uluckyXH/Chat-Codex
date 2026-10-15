@@ -132,6 +132,10 @@ export class MemoryStateStore {
       .sort((left, right) => left.routeKey.localeCompare(right.routeKey));
   }
 
+  acquireGroupAccessWriter(): () => void { return () => {}; }
+
+  getGroupAccessError(): string | undefined { return undefined; }
+
   getGroupAccess(routeKey: string): GroupAccessRecord | undefined {
     const record = this.groupAccess.get(routeKey);
     return record ? cloneGroupAccessRecord(record) : undefined;
@@ -417,17 +421,7 @@ function cloneTrustedRoute(record: TrustedRouteRecord): TrustedRouteRecord {
 }
 
 function cloneGroupAccessRecord(record: GroupAccessRecord): GroupAccessRecord {
-  return {
-    ...record,
-    superAdmin: record.superAdmin ? { ...record.superAdmin } : undefined,
-    blockedSenders: record.blockedSenders.map((sender) => ({ ...sender })),
-    knownPrincipals: record.knownPrincipals?.map((principal) => ({ ...principal })),
-    reservedRoles: record.reservedRoles?.map((role) => ({
-      ...role,
-      members: role.members.map((member) => ({ ...member })),
-      capabilities: { ...role.capabilities },
-    })),
-  };
+  return structuredClone(record);
 }
 
 function cloneSessionContextSnapshot(record: SessionContextSnapshotRecord): SessionContextSnapshotRecord {

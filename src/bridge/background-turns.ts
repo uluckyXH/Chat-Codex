@@ -189,7 +189,7 @@ export class BridgeBackgroundTurns {
         detail: event.approval.reason ?? event.approval.kind,
         startedAt: currentStartedAt(this.state.getSession(event.sessionId)?.status),
       });
-      const pending = this.approvals.create(state.routeKey, state.message.sender.id, event.approval);
+      const pending = this.approvals.create(state.routeKey, state.message.sender.id, event.approval, state.message.groupPolicy === "feishu");
       await this.delivery.sendApprovalUntilDelivered(state.routeKey, state.target, pending);
     } else if (event.type === "approval.resolved") {
       this.approvals.resolveAdapterApproval(

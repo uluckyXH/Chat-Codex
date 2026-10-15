@@ -1,3 +1,7 @@
+import type { FeishuGroupMessageRaw } from "../channels/feishu/group/group-types.js";
+import { BridgeGroupController } from "./group-controller.js";
+import { groupSenderRole } from "../group-access/policy.js";
+import { withCodexInputText } from "../codex/input.js";
 import { ApprovalManager } from "../approvals/approval-manager.js";
 import type { ApprovalDecision } from "../approvals/types.js";
 import type { CodexRunPolicyStatus } from "../codex/codex-cli.js";
@@ -116,6 +120,8 @@ export class Bridge {
   private readonly commandRouter: BridgeCommandRouter;
   private readonly feishuGroupMembers: FeishuGroupMemberRegistry;
   private readonly groupAccess: GroupAccessService;
+  private readonly groupController: BridgeGroupController;
+  private attachmentSequence = 0;
   private readonly cwd: string;
   private readonly defaultProgressMode: ProgressDeliveryMode;
   private readonly routeProgressModes = new Map<string, ProgressDeliveryMode>();
@@ -125,6 +131,8 @@ export class Bridge {
   private readonly routeTargets = new Map<string, ChannelTarget>();
   private readonly pendingMedia = new PendingMediaManager();
   private stopBackgroundEvents?: () => void;
+  private releaseGroupWriter?: () => void;
+  private stopping = false;
 
   constructor(options: BridgeOptions) {
     if (Boolean(options.channel) === Boolean(options.channels)) {
@@ -152,6 +160,18 @@ export class Bridge {
       logger: this.logger,
       transcript: this.transcript,
       approvalSendRetryDelayMs: options.approvalSendRetryDelayMs ?? APPROVAL_SEND_RETRY_DELAY_MS,
+      authorizeMedia: (target) => {
+        if (!this.isManagedGroupTarget(target)) return true;
+        const allowed = !this.stopping && !this.groupAccess.error() && this.state.isRouteTrusted(target.routeKey) && this.groupAccess.canManage(target.routeKey, target.recipient.id).allowed;
+        if (allowed) target.context = { ...target.context, groupPermissionRevision: this.groupAccess.get(target.routeKey)?.revision ?? 0 };
+        return allowed;
+      },
+      auditMedia: (target, media, outcome, messageId) => {
+        if (this.isManagedGroupTarget(target)) this.groupAccess.audit(target.routeKey, { actor: target.recipient.id, action: "file_export", outcome, target: media.name, detail: `session=${target.context?.sessionId ?? "unknown"};message=${messageId ?? "none"};authorizationRevision=${target.context?.groupPermissionRevision ?? "none"}` });
+      },
+    });
+    this.groupController = new BridgeGroupController(this.groupAccess, this.delivery, (routeKey) => {
+      this.pendingMedia.removeWhere(routeKey, (a) => Boolean(a.origin && this.groupAccess.roleForSender(routeKey, a.origin.senderId) === "blocked"));
     });
     this.routeTrustGate = new RouteTrustGate({
       state: this.state,
@@ -161,7 +181,7 @@ export class Bridge {
       mode: options.routeTrustMode,
       pairingCodes: options.pairingCodeManager,
       onRouteTrusted: (record) => {
-        this.groupAccess.ensureForTrustedRoute(record);
+        if (this.channels.get(record.channelId)?.groupPolicy === "feishu") this.groupAccess.ensureForTrustedRoute(record);
       },
     });
     this.contextRefresh = new SessionContextRefreshManager({
@@ -209,6 +229,7 @@ export class Bridge {
       recordSessionContextSnapshot: (sessionId, observedBy) => this.contextRefresh.recordSnapshot(sessionId, observedBy),
     });
     this.routeQueue = new BridgeRouteQueue({
+      preparePrompt: (message, input, sendFile) => this.prepareGroupPrompt(message, input, sendFile),
       codex: this.codex,
       state: this.state,
       approvals: this.approvals,
@@ -257,6 +278,7 @@ export class Bridge {
       hasRouteWorker: (routeKey) => this.routeQueue.hasWorker(routeKey),
     });
     this.routeSteering = new BridgeRouteSteering({
+      preparePrompt: (message, input) => this.prepareGroupPrompt(message, input, false),
       codex: this.codex,
       state: this.state,
       logger: this.logger,
@@ -286,12 +308,19 @@ export class Bridge {
       runPolicyStatus: (sessionId) => this.runPolicyStatus(sessionId),
     });
     this.commandRouter = new BridgeCommandRouter({
+      authorizeCommand: (message, name) => {
+        if (!isFeishuGroupMessage(message)) return { allowed: true };
+        if (this.stopping || this.groupAccess.error() || this.groupAccess.isSenderBlocked(message)) return { allowed: false };
+        if (!isFeishuGroupPreTrustCommand(name) && !this.state.isRouteTrusted(message.routeKey)) return { allowed: false, text: "群配对已失效，请重新配对。" };
+        const text = this.groupController.commandDenied(message, name);
+        return { allowed: !text, text };
+      },
       logger: this.logger,
       delivery: this.delivery,
       deliveryPolicyFor: (message) => this.deliveryPolicyFor(message),
       isRouteExecutionBusy: (routeKey) => this.isRouteExecutionBusy(routeKey),
       handlers: {
-        help: (message) => this.statusTextRenderer.helpText(message),
+        help: (message) => isFeishuGroupMessage(message) ? this.groupController.help(message) : this.statusTextRenderer.helpText(message),
         createNewSession: (message, target, args, rawText) => handleNewSessionCommand({
           sessionFlow: this.sessionFlow,
           routeQueue: this.routeQueue,
@@ -335,7 +364,7 @@ export class Bridge {
           delivery: this.delivery,
           statusText: this.statusTextRenderer,
         }, message, target, rawMode),
-        groupReceive: (message, target, args, commandName) => handleGroupReceiveCommand({
+        groupReceive: (message, target, args, commandName) => isFeishuGroupMessage(message) ? this.groupController.command(message, target, args) : handleGroupReceiveCommand({
           state: this.state,
           delivery: this.delivery,
           channelCapabilities: options.channelCapabilities,
@@ -391,14 +420,17 @@ export class Bridge {
   }
 
   async start(): Promise<void> {
+    this.stopping = false;
+    if (this.channels.ids().some((id) => this.channels.get(id)?.groupPolicy === "feishu")) this.releaseGroupWriter = this.state.acquireGroupAccessWriter();
     this.stopBackgroundEvents = this.codex.onBackgroundEvent?.((event) => this.backgroundTurns.handle(event));
     this.channels.onMessage((message) => this.handleMessage(message));
     this.channels.onApprovalAction((action) => this.handleChannelApprovalAction(action));
-    await this.channels.start();
+    try { await this.channels.start(); } catch (error) { this.releaseGroupWriter?.(); this.releaseGroupWriter = undefined; throw error; }
     this.logger.info("bridge started", { channels: this.channels.ids().join(",") });
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     this.routeSteering.clearAll();
     this.pendingMedia.clearAll();
     this.pendingInput.clearAll();
@@ -406,16 +438,25 @@ export class Bridge {
     this.commentaryDelivery.clearAll();
     this.stopBackgroundEvents?.();
     this.stopBackgroundEvents = undefined;
-    await this.channels.stop();
-    await this.codex.stop?.();
+    try { await this.channels.stop(); await this.codex.stop?.(); }
+    finally { this.releaseGroupWriter?.(); this.releaseGroupWriter = undefined; }
     this.logger.info("bridge stopped", { channels: this.channels.ids().join(",") });
   }
 
   async handleMessage(message: ChannelMessage): Promise<void> {
+    message = { ...message, groupPolicy: message.conversation.kind === "group" ? this.channels.get(message.channelId)?.groupPolicy : undefined };
+    const managedGroup = isFeishuGroupMessage(message);
+    if (managedGroup) {
+      if (this.stopping) return;
+      if (!this.channels.getCapabilities(message.channelId).group) return;
+      if (this.groupAccess.error()) { await this.delivery.sendText(replyTargetFromMessage(message), "群权限文件不可用，请在本机修复。"); return; }
+      // Blacklisting precedes pre-trust commands, state updates and media downloads.
+      if (this.groupAccess.isSenderBlocked(message)) return;
+    }
     message = this.enrichMessageFromRouteHistory(message);
     const text = message.text?.trim() ?? "";
     const command = text ? parseCommand(text) : undefined;
-    const attachments = classifyInboundAttachments(message.attachments);
+    let attachments = classifyInboundAttachments(message.attachments);
     const hasInboundMedia = attachments.usable.length > 0 || attachments.failed.length > 0 || attachments.unsupported.length > 0;
     if (!text && !hasInboundMedia) return;
     this.transcript?.inbound(message, text || inboundAttachmentTranscriptText(attachments.usable.length));
@@ -432,9 +473,14 @@ export class Bridge {
     this.state.recordRouteMessage(message);
     const trust = await this.routeTrustGate.handle(message, target);
     if (trust.action === "handled") return;
-    this.sessionFlow.claimPendingInitialRouteBindingRoute(message);
+    if (!managedGroup) this.sessionFlow.claimPendingInitialRouteBindingRoute(message);
     if (isFeishuGroupMessage(message) && this.state.isRouteTrusted(message.routeKey)) {
-      this.groupAccess.ensureForTrustedGroupMessage(message);
+      try {
+        this.groupAccess.ensureForTrustedGroupMessage(message);
+        const botId = (message.raw as FeishuGroupMessageRaw | undefined)?.chatCodex?.feishu?.group?.mentions.find((p) => p.isBot)?.openId;
+        if (botId) this.groupAccess.recordBotIdentity(message.routeKey, botId);
+      }
+      catch { await this.delivery.sendText(target, "群权限保存失败，请在本机检查。"); return; }
       if (this.groupAccess.isSenderBlocked(message)) return;
     }
     if (isFeishuGroupMessage(message)
@@ -449,6 +495,13 @@ export class Bridge {
       rawText: text,
       commandName: command?.name,
     })) return;
+    if (managedGroup && command?.isCommand) {
+      const denied = this.groupController.commandDenied(message, command.name ?? "");
+      if (denied) {
+        this.groupAccess.audit(message.routeKey, { actor: message.sender.id, action: `command:${command.name}`, outcome: "denied" });
+        await this.delivery.sendText(target, denied); return;
+      }
+    }
     if (this.isCompactRunning(message.routeKey)) {
       if (command?.isCommand && isCommandAllowedDuringCompact(command.name ?? "")) {
         await this.commandRouter.handle(message, target, command.name ?? "", command.args, text);
@@ -460,6 +513,17 @@ export class Bridge {
     if (command?.isCommand) {
       await this.commandRouter.handle(message, target, command.name ?? "", command.args, text);
       return;
+    }
+    if (managedGroup) {
+      await this.channels.get(message.channelId)?.hydrateAttachments?.(message, () => !this.groupAccess.error() && this.state.isRouteTrusted(message.routeKey) && !this.groupAccess.isSenderBlocked(message));
+      if (this.groupAccess.isSenderBlocked(message) || !this.state.isRouteTrusted(message.routeKey)) return;
+      message.attachments = message.attachments?.map((attachment) => ({ ...attachment, origin: { senderId: message.sender.id, displayName: message.sender.displayName, messageId: message.id, receivedAt: message.timestamp, sequence: ++this.attachmentSequence } }));
+      attachments = classifyInboundAttachments(message.attachments);
+      const removed = this.pendingMedia.removeWhere(message.routeKey, (a) => Boolean(a.origin && groupSenderRole(this.groupAccess.get(message.routeKey), a.origin.senderId) === "blocked"));
+      if (removed) await this.delivery.sendText(target, `已移除 ${removed} 个被拉黑成员的附件，剩余 ${this.pendingMedia.count(message.routeKey)} 个群聊共享待处理附件。`);
+      if (this.sessionFlow.hasSessionCwdSelection(message.routeKey) || this.sessionFlow.hasSessionSelection(message.routeKey) || this.sessionFlow.shouldAskBeforeBindingSession(message)) {
+        await this.delivery.sendText(target, "请先在本机为当前群配置会话绑定。"); return;
+      }
     }
     this.clearCompactConfirmation(message.routeKey);
     if (attachments.failed.length > 0) {
@@ -501,6 +565,20 @@ export class Bridge {
     const input = withGroupConversationPromptPrefix(message, rawInput, groupPrefixMode);
     if (await this.routeSteering.tryEnqueue(message, target, input)) return;
     await this.routeQueue.enqueuePrompt(message, target, input);
+  }
+
+  private isManagedGroupTarget(target: ChannelTarget): boolean {
+    return target.conversation.kind === "group" && this.channels.get(target.channelId)?.groupPolicy === "feishu";
+  }
+
+  private prepareGroupPrompt(message: ChannelMessage, input: CodexPromptInput, sendFile: boolean): CodexPromptInput | undefined {
+    if (!isFeishuGroupMessage(message)) return input;
+    if (this.stopping || this.groupAccess.error() || !this.state.isRouteTrusted(message.routeKey) || this.groupAccess.isSenderBlocked(message)) return undefined;
+    if (sendFile && !this.groupAccess.canManage(message.routeKey, message.sender.id).allowed) return undefined;
+    if (typeof input === "string") return input;
+    const items = input.items.filter((item) => !(item.type !== "text" && item.origin && groupSenderRole(this.groupAccess.get(message.routeKey), item.origin.senderId) === "blocked"));
+    const sources = items.flatMap((item) => item.type !== "text" && item.origin ? [`${item.origin.displayName ?? item.origin.senderId} 发来的${item.type === "localImage" ? "图片" : "文件"} ${item.origin.sequence}（消息 ${item.origin.messageId}）`] : []);
+    return sources.length ? withCodexInputText({ ...input, items }, `${input.text}\n\n群共享附件来源：\n${sources.join("\n")}`) : { ...input, items };
   }
 
   private enrichMessageFromRouteHistory(message: ChannelMessage): ChannelMessage {
@@ -545,13 +623,9 @@ export class Bridge {
     args: string[],
     decision: ApprovalDecision,
   ): Promise<void> {
-    if (isFeishuGroupMessage(message) && this.state.isRouteTrusted(message.routeKey)) {
-      const approval = this.groupAccess.canApprove(message);
-      if (!approval.allowed) {
-        if (approval.reason === "blocked") return;
-        await this.delivery.sendText(target, groupApprovalDeniedText(approval.reason));
-        return;
-      }
+    if (isFeishuGroupMessage(message)) {
+      await this.delivery.sendText(target, await this.groupController.approve(message, args, decision, this.approvals, this.codex));
+      return;
     }
     await handleApprovalCommand({
       approvals: this.approvals,
@@ -561,6 +635,9 @@ export class Bridge {
   }
 
   private async handleChannelApprovalAction(action: ChannelApprovalAction): Promise<ChannelApprovalActionResult> {
+    if (this.isManagedGroupTarget(replyTargetFromMessage(action.message))) {
+      return { status: "rejected", text: "群聊请 @Bot 使用 /OK <编号> 或 /NO <编号>。" };
+    }
     this.logger.info("channel approval action received", {
       channel: action.message.channelId,
       routeKey: action.message.routeKey,
@@ -592,7 +669,7 @@ export class Bridge {
   ): Promise<void> {
     const result = this.pendingMedia.add(message.routeKey, attachments ?? [], message.id);
     if (result.accepted.length > 0) {
-      await this.delivery.sendText(target, pendingMediaPromptText(result.total));
+      await this.delivery.sendText(target, isFeishuGroupMessage(message) ? `群聊共享待处理附件：${result.total} 个；任何已登记成员可 @Bot 补充要求，管理员可 /cancel 清空。` : pendingMediaPromptText(result.total));
     }
     if (result.rejected.length > 0) {
       await this.delivery.sendText(target, pendingMediaOverflowText(result.rejected.length, result.total));
@@ -764,10 +841,4 @@ function withoutSenderDisplayName(message: ChannelMessage): ChannelMessage {
 
 function isCommandAllowedDuringCompact(name: string): boolean {
   return name === "status" || name === "help" || name === "whoami" || name === "debug";
-}
-
-function groupApprovalDeniedText(reason: string | undefined): string {
-  if (reason === "missing_super_admin") return "当前群还没有超级管理员，暂不能处理 Codex 审批。请在本机 TUI 设置超级管理员。";
-  if (reason === "missing_group_access") return "当前群权限记录还没有初始化，暂不能处理 Codex 审批。请重新完成群配对。";
-  return "当前群默认只允许超级管理员处理 Codex 审批。";
 }

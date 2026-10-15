@@ -1,7 +1,8 @@
+import type { ChannelAttachment } from "../protocol/channel.js";
 export type CodexInputItem =
   | { type: "text"; text: string }
-  | { type: "localImage"; path: string }
-  | { type: "localFile"; path: string; name?: string; mimeType?: string };
+  | { type: "localImage"; path: string; origin?: ChannelAttachment["origin"] }
+  | { type: "localFile"; path: string; name?: string; mimeType?: string; origin?: ChannelAttachment["origin"] };
 
 export interface CodexTurnInput {
   text: string;

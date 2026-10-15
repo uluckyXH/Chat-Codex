@@ -1,3 +1,4 @@
+import { GroupAccessView } from "./group-access-view.js";
 import React from "react";
 import type { BindingSummary, SessionChoices } from "../actions/binding-actions.js";
 import type { LauncherActions, LauncherDashboard, PairingRouteSummary } from "../actions/launcher-actions.js";
@@ -89,7 +90,8 @@ export function renderTuiScreen({
   }
   if (screen.name === "addFeishu") return <AddFeishuView screen={screen} onSubmit={submitFeishuValue} />;
   if (screen.name === "bindings") return <BindingsView bindings={bindings} pendingBindings={pendingBindings} selected={selected} />;
-  if (screen.name === "bindingDetail") return <BindingDetailView binding={currentBinding} selected={selected} />;
+  if (screen.name === "bindingDetail") return <BindingDetailView binding={currentBinding} selected={selected} groupManagement={actions.supportsGroupManagement(screen.routeKey)} />;
+  if (screen.name === "groupAccess") return <GroupAccessView actions={actions} routeKey={screen.routeKey} onBack={() => setScreen({ name: "bindingDetail", routeKey: screen.routeKey })} />;
   if (screen.name === "pairing") return <PairingView pairing={dashboard.pairing} selected={selected} />;
   if (screen.name === "pairingDetail") return <PairingDetailView pairing={currentPairing} selected={selected} />;
   if (screen.name === "sessionSelect") return <SessionSelectView target={screen.target} choices={getSessionChoices(screen.target)} selected={selected} page={sessionPageIndex} binding={screen.target.kind === "route" ? actions.getBinding(screen.target.routeKey) : undefined} />;

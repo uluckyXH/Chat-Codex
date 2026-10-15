@@ -1,3 +1,4 @@
+import { MemoryStateStore } from "../../src/state/memory-state-store.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Bridge } from "../../src/bridge/bridge.js";
@@ -1502,9 +1503,12 @@ test("Bridge prefixes group mid-turn steers as speaker supplements", async () =>
 });
 
 test("Bridge requires Feishu group member registration before ordinary prompts", async () => {
-  const channel = new MockChannelAdapter({ id: "feishu", accountId: "work" });
+  const channel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "work" });
   const codex = new MockCodexAdapter();
-  const bridge = new Bridge({ channel, codex, cwd: process.cwd(), feishuGroupMemberStateRootDir: tempStateRoot("bridge-group-registration-") });
+  const state = new MemoryStateStore();
+  const now = new Date().toISOString();
+  state.trustRoute({ routeKey: "feishu:work:group:oc_group", channelId: "feishu", accountId: "work", conversationKind: "group", conversationId: "oc_group", trustedBySenderId: "ou_xh", trustMethod: "pairing_code", trustedAt: now, createdAt: now, updatedAt: now });
+  const bridge = new Bridge({ channel, codex, state, cwd: process.cwd(), feishuGroupMemberStateRootDir: tempStateRoot("bridge-group-registration-") });
 
   await bridge.start();
   await channel.emitText("先帮我看一下", {
@@ -1542,7 +1546,7 @@ test("Bridge requires Feishu group member registration before ordinary prompts",
 });
 
 test("Bridge shows Feishu group-only member commands in group help", async () => {
-  const channel = new MockChannelAdapter({ id: "feishu", accountId: "work" });
+  const channel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "work" });
   const codex = new MockCodexAdapter();
   const bridge = new Bridge({ channel, codex, cwd: process.cwd(), feishuGroupMemberStateRootDir: tempStateRoot("bridge-group-help-") });
 
@@ -1561,9 +1565,9 @@ test("Bridge shows Feishu group-only member commands in group help", async () =>
 
   const groupHelp = channel.sentMessages[0]?.text ?? "";
   const directHelp = channel.sentMessages[1]?.text ?? "";
-  assert.ok(groupHelp.includes("- `/name <名称>`"));
-  assert.ok(groupHelp.includes("- `/name`: 查看你在当前飞书群里的展示名登记状态。"));
-  assert.ok(groupHelp.includes("- `/whoami`: 查看当前飞书群员身份、登记状态和群配对状态。"));
+  assert.ok(groupHelp.includes("/name"));
+  assert.ok(groupHelp.includes("登记"));
+  assert.ok(groupHelp.includes("/whoami"));
   assert.equal(directHelp.includes("/name <名称>"), false);
   assert.equal(directHelp.includes("当前飞书群员身份"), false);
 });

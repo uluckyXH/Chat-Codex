@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { ApprovalDecision, ApprovalRequest, PendingApproval } from "./types.js";
 import {
   availableApprovalDecisions,
@@ -18,9 +19,9 @@ export class ApprovalManager {
     this.ttlMs = typeof options.ttlMs === "number" ? options.ttlMs : undefined;
   }
 
-  create(routeKey: string, requestedBy: string, request: ApprovalRequest): PendingApproval {
+  create(routeKey: string, requestedBy: string, request: ApprovalRequest, scoped = false): PendingApproval {
     const now = new Date();
-    const approvalKey = this.nextKey();
+    const approvalKey = scoped ? `g${randomBytes(6).toString("hex")}` : this.nextKey();
     const pending: PendingApproval = {
       ...request,
       approvalKey,
@@ -72,6 +73,27 @@ export class ApprovalManager {
     return pending;
   }
 
+  beginResolution(key: string, routeKey: string, decision: ApprovalDecision, actor: string): PendingApproval {
+    const pending = this.decide(key, routeKey, decision);
+    pending.status = "resolving";
+    pending.resolvedBy = actor;
+    return pending;
+  }
+
+  finishResolution(key: string, outcome: "resolved" | "uncertain" | "pending"): void {
+    const pending = this.approvals.get(key);
+    if (!pending || pending.status === "resolved") return;
+    pending.status = outcome;
+    if (outcome === "resolved") pending.resolvedAt = new Date().toISOString();
+    if (outcome === "pending") { pending.decision = undefined; pending.resolvedBy = undefined; }
+  }
+
+  formatForGroup(pending: PendingApproval): string {
+    return [`审批编号: ${pending.approvalKey}`, ...this.formatForChannel(pending).split("\n")
+      .filter((line) => !line.startsWith("/P "))
+      .map((line) => line.replace(/^\/(OK|NO) /, `/$1 ${pending.approvalKey} `))].join("\n");
+  }
+
   cancelRoute(routeKey: string, reason?: string): PendingApproval[] {
     this.expireOld();
     return this.cancelPending((pending) => pending.routeKey === routeKey, reason);
@@ -102,7 +124,7 @@ export class ApprovalManager {
     this.expireOld();
     for (const pending of this.approvals.values()) {
       if (pending.routeKey !== routeKey) continue;
-      if (pending.status !== "pending") continue;
+      if (!["pending", "resolving", "uncertain"].includes(pending.status)) continue;
       if (pending.adapterApprovalId !== adapterApprovalId) continue;
       pending.status = "resolved";
       pending.decisionReason = reason?.trim() || undefined;

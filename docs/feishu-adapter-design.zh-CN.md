@@ -21,7 +21,7 @@
 - 用户身份 OAuth 或以用户身份发消息。
 - webhook 入站模式。
 
-群聊后续设计见 `docs/feishu-group-chat-design.zh-CN.md`。群聊开启时必须同时处理 @bot 触发、route 配对、群内审批权限、小黑屋和发言人身份展示，不能只把 `group: false` 改成 `true`。
+群聊下一轮适配以[群聊接入、管理员与黑名单设计](feishu-group-chat-design.zh-CN.md)为准（2026-10-15 已实现，真实租户验收待执行）。本轮正式支持普通管理员审批、发文件，以及仅对普通成员的拉黑／解禁；群聊开启须同时完成 @bot、配对、名册、统一权限检查、管理命令／TUI 和真实链路验收。当前源码公开入口已开放，每个机器人仍默认关闭、须显式启用；步骤见[群聊使用说明](feishu-group-chat-guide.zh-CN.md)。
 
 ## 参考来源
 

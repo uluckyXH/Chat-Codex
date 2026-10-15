@@ -1,3 +1,6 @@
+import { acquireGroupWriter, assertGroupWriter } from "../group-access/writer-lock.js";
+import fs from "node:fs";
+import { GROUP_ACCESS_SCHEMA_VERSION, normalizeGroupAccessDocument } from "../group-access/state-validation.js";
 import path from "node:path";
 import type { CodexRunPolicy } from "../codex/codex-cli.js";
 import type { CodexSession } from "../codex/types.js";
@@ -50,6 +53,8 @@ interface LoadedFileState {
   pendingBindings: Map<string, PendingBindingRecord>;
   trustedRoutes: Map<string, TrustedRouteRecord>;
   groupAccess: Map<string, GroupAccessRecord>;
+  groupAccessError?: string;
+  groupAccessNeedsMigration?: boolean;
 }
 
 export class FileStateStore extends MemoryStateStore {
@@ -67,6 +72,9 @@ export class FileStateStore extends MemoryStateStore {
   private readonly pendingBindingsPath: string;
   private readonly trustedRoutesPath: string;
   private readonly groupAccessPath: string;
+  private groupAccessError?: string;
+  private groupWriterToken?: string;
+  private groupAccessNeedsMigration = false;
 
   constructor(options: FileStateStoreOptions = {}) {
     const loaded = loadFileState(options);
@@ -85,6 +93,8 @@ export class FileStateStore extends MemoryStateStore {
     this.persistedPendingBindings = loaded.pendingBindings;
     this.persistedTrustedRoutes = loaded.trustedRoutes;
     this.persistedGroupAccess = loaded.groupAccess;
+    this.groupAccessError = loaded.groupAccessError;
+    this.groupAccessNeedsMigration = loaded.groupAccessNeedsMigration ?? false;
     this.routesPath = path.join(this.rootDir, "routes.json");
     this.sessionOwnersPath = path.join(this.rootDir, "session-owners.json");
     this.sessionPoliciesPath = path.join(this.rootDir, "session-policies.json");
@@ -314,22 +324,40 @@ export class FileStateStore extends MemoryStateStore {
 
   override getGroupAccess(routeKey: string): GroupAccessRecord | undefined {
     const record = this.persistedGroupAccess.get(routeKey);
-    return record ? cloneGroupAccessRecord(record) : super.getGroupAccess(routeKey);
+    return record ? cloneGroupAccessRecord(record) : undefined;
   }
 
+  override acquireGroupAccessWriter(): () => void {
+    const lock = acquireGroupWriter(this.rootDir);
+    this.groupWriterToken = lock.token;
+    const loaded = loadGroupAccess(this.groupAccessPath);
+    this.persistedGroupAccess = loaded.records;
+    this.groupAccessError = loaded.error;
+    this.groupAccessNeedsMigration = loaded.migration ?? false;
+    return () => { lock.release(); this.groupWriterToken = undefined; };
+  }
+
+  override getGroupAccessError(): string | undefined { return this.groupAccessError; }
+
   override upsertGroupAccess(record: GroupAccessRecord): GroupAccessRecord {
-    const next = super.upsertGroupAccess(record);
-    this.persistedGroupAccess.set(next.routeKey, cloneGroupAccessRecord(next));
-    this.persistGroupAccess();
-    return next;
+    if (this.groupAccessError) throw new Error(this.groupAccessError);
+    const next = cloneGroupAccessRecord(record);
+    const records = new Map(this.persistedGroupAccess);
+    records.set(next.routeKey, next);
+    this.writeGroupAccess([...records.values()]);
+    this.persistedGroupAccess = records;
+    return super.upsertGroupAccess(next);
   }
 
   override deleteGroupAccess(routeKey: string): GroupAccessRecord | undefined {
-    const removed = super.deleteGroupAccess(routeKey);
-    if (removed) {
-      this.persistedGroupAccess.delete(routeKey);
-      this.persistGroupAccess();
-    }
+    if (this.groupAccessError) throw new Error(this.groupAccessError);
+    const removed = this.getGroupAccess(routeKey);
+    if (!removed) return undefined;
+    const records = new Map(this.persistedGroupAccess);
+    records.delete(routeKey);
+    this.writeGroupAccess([...records.values()]);
+    this.persistedGroupAccess = records;
+    super.deleteGroupAccess(routeKey);
     return removed;
   }
 
@@ -349,6 +377,7 @@ export class FileStateStore extends MemoryStateStore {
   }
 
   removeChannelState(channelId: string): RemoveChannelStateResult {
+    assertGroupWriter(this.rootDir, this.groupWriterToken);
     const routes = [...this.routes.values()].filter((route) => route.channelId === channelId);
     const pending = [...this.persistedPendingBindings.values()].filter((record) => record.channelId === channelId);
     const releasedSessions = new Set<string>();
@@ -376,6 +405,7 @@ export class FileStateStore extends MemoryStateStore {
       this.persistedPendingBindings.delete(record.id);
     }
 
+    this.persistGroupAccess();
     this.persist();
     return {
       channelId,
@@ -413,7 +443,6 @@ export class FileStateStore extends MemoryStateStore {
     this.persistSessionContextSnapshots();
     this.persistPendingBindings();
     this.persistTrustedRoutes();
-    this.persistGroupAccess();
   }
 
   private persistRoutes(): void {
@@ -473,11 +502,20 @@ export class FileStateStore extends MemoryStateStore {
   }
 
   private persistGroupAccess(): void {
-    writeJsonFileAtomic(this.groupAccessPath, {
-      schemaVersion: LOCAL_STATE_SCHEMA_VERSION,
-      updatedAt: new Date().toISOString(),
-      groups: this.listGroupAccess(),
-    } satisfies GroupAccessDocument);
+    // A broken group file must not interrupt persistence for unrelated channels.
+    if (!this.groupAccessError) this.writeGroupAccess(this.listGroupAccess());
+  }
+
+  private writeGroupAccess(groups: GroupAccessRecord[]): void {
+    assertGroupWriter(this.rootDir, this.groupWriterToken);
+    if (this.groupAccessNeedsMigration && fs.existsSync(this.groupAccessPath)) {
+      const backup = `${this.groupAccessPath}.v1.bak`;
+      if (!fs.existsSync(backup)) fs.copyFileSync(this.groupAccessPath, backup, fs.constants.COPYFILE_EXCL);
+      fs.chmodSync(backup, 0o600);
+    }
+    const doc = normalizeGroupAccessDocument({ schemaVersion: GROUP_ACCESS_SCHEMA_VERSION, updatedAt: new Date().toISOString(), groups });
+    writeJsonFileAtomic(this.groupAccessPath, doc);
+    this.groupAccessNeedsMigration = false;
   }
 
   private updateTrustedRouteLastSeen(message: ChannelMessage): void {
@@ -525,7 +563,9 @@ function loadFileState(options: FileStateStoreOptions): LoadedFileState {
     sessionContextSnapshots,
     pendingBindings,
     trustedRoutes,
-    groupAccess,
+    groupAccess: groupAccess.records,
+    groupAccessError: groupAccess.error,
+    groupAccessNeedsMigration: groupAccess.migration,
   };
 }
 
@@ -543,17 +583,7 @@ function cloneRouteRecord(record: RouteRecord): RouteRecord {
 }
 
 function cloneGroupAccessRecord(record: GroupAccessRecord): GroupAccessRecord {
-  return {
-    ...record,
-    superAdmin: record.superAdmin ? { ...record.superAdmin } : undefined,
-    blockedSenders: record.blockedSenders.map((sender) => ({ ...sender })),
-    knownPrincipals: record.knownPrincipals?.map((principal) => ({ ...principal })),
-    reservedRoles: record.reservedRoles?.map((role) => ({
-      ...role,
-      members: role.members.map((member) => ({ ...member })),
-      capabilities: { ...role.capabilities },
-    })),
-  };
+  return structuredClone(record);
 }
 
 function loadRoutes(filePath: string): Map<string, RouteRecord> {
@@ -652,14 +682,14 @@ function loadTrustedRoutes(filePath: string): Map<string, TrustedRouteRecord> {
   return trustedRoutes;
 }
 
-function loadGroupAccess(filePath: string): Map<string, GroupAccessRecord> {
-  const doc = readJsonFile<GroupAccessDocument>(filePath, emptyGroupAccessDocument());
-  const groups = new Map<string, GroupAccessRecord>();
-  for (const record of Array.isArray(doc.groups) ? doc.groups : []) {
-    const normalized = normalizeGroupAccessRecord(record);
-    if (normalized) groups.set(normalized.routeKey, normalized);
+function loadGroupAccess(filePath: string): { records: Map<string, GroupAccessRecord>; error?: string; migration?: boolean } {
+  try {
+    const raw: GroupAccessDocument = fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, "utf8")) : { schemaVersion: 2, updatedAt: new Date().toISOString(), groups: [] };
+    const doc = normalizeGroupAccessDocument(raw);
+    return { records: new Map(doc.groups.map((r) => [r.routeKey, r])), migration: raw.schemaVersion === 1 };
+  } catch (error) {
+    return { records: new Map(), error: error instanceof Error ? error.message : String(error) };
   }
-  return groups;
 }
 
 function mergeOwnersWithActiveRoutes(
@@ -775,77 +805,6 @@ function normalizeRoutePolicy(value: RouteRecord["policy"]): RouteRecord["policy
   return Object.values(next).some((item) => item !== undefined) ? next : undefined;
 }
 
-function normalizeGroupAccessRecord(value: unknown): GroupAccessRecord | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Partial<GroupAccessRecord>;
-  if (!record.routeKey || !record.channelId || !record.accountId || record.conversationKind !== "group" || !record.conversationId) return undefined;
-  const now = new Date(0).toISOString();
-  return {
-    routeKey: record.routeKey,
-    channelId: record.channelId,
-    accountId: record.accountId,
-    conversationKind: "group",
-    conversationId: record.conversationId,
-    superAdmin: normalizeGroupPrincipal(record.superAdmin),
-    blockedSenders: Array.isArray(record.blockedSenders)
-      ? record.blockedSenders.map(normalizeGroupPrincipal).filter((principal): principal is NonNullable<GroupAccessRecord["superAdmin"]> => Boolean(principal))
-      : [],
-    knownPrincipals: Array.isArray(record.knownPrincipals)
-      ? record.knownPrincipals.map(normalizeKnownGroupPrincipal).filter((principal): principal is NonNullable<GroupAccessRecord["knownPrincipals"]>[number] => Boolean(principal))
-      : undefined,
-    normalMessagePolicy: record.normalMessagePolicy === "mentioned_non_blocked" ? record.normalMessagePolicy : "mentioned_non_blocked",
-    approvalPolicy: record.approvalPolicy === "any_non_blocked" ? "any_non_blocked" : "super_admin_only",
-    managementPolicy: "super_admin_only",
-    blockedUserBehavior: "silent",
-    reservedRoles: Array.isArray(record.reservedRoles) ? record.reservedRoles.map(normalizeGroupRole).filter((role): role is NonNullable<GroupAccessRecord["reservedRoles"]>[number] => Boolean(role)) : undefined,
-    createdAt: record.createdAt ?? now,
-    updatedAt: record.updatedAt ?? record.createdAt ?? now,
-  };
-}
-
-function normalizeGroupPrincipal(value: unknown): GroupAccessRecord["superAdmin"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const principal = value as GroupAccessRecord["superAdmin"];
-  if (!principal?.senderId) return undefined;
-  return {
-    senderId: principal.senderId,
-    displayName: stringOrUndefined(principal.displayName),
-    source: principal.source === "command" || principal.source === "tui" ? principal.source : "pairing",
-    createdBySenderId: stringOrUndefined(principal.createdBySenderId),
-    createdAt: principal.createdAt ?? new Date(0).toISOString(),
-  };
-}
-
-function normalizeKnownGroupPrincipal(value: unknown): NonNullable<GroupAccessRecord["knownPrincipals"]>[number] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const principal = value as NonNullable<GroupAccessRecord["knownPrincipals"]>[number];
-  if (!principal.senderId) return undefined;
-  return {
-    senderId: principal.senderId,
-    displayName: stringOrUndefined(principal.displayName),
-    firstSeenAt: principal.firstSeenAt ?? new Date(0).toISOString(),
-    lastSeenAt: principal.lastSeenAt ?? principal.firstSeenAt ?? new Date(0).toISOString(),
-    source: principal.source === "pairing" || principal.source === "tui" ? principal.source : "message",
-  };
-}
-
-function normalizeGroupRole(value: unknown): NonNullable<GroupAccessRecord["reservedRoles"]>[number] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const role = value as NonNullable<GroupAccessRecord["reservedRoles"]>[number];
-  if (!role.roleId || !role.label) return undefined;
-  return {
-    roleId: role.roleId,
-    label: role.label,
-    members: Array.isArray(role.members)
-      ? role.members.map(normalizeGroupPrincipal).filter((principal): principal is NonNullable<GroupAccessRecord["superAdmin"]> => Boolean(principal))
-      : [],
-    capabilities: role.capabilities && typeof role.capabilities === "object" ? { ...role.capabilities } : {},
-    enabled: role.enabled !== false,
-    createdAt: role.createdAt ?? new Date(0).toISOString(),
-    updatedAt: role.updatedAt ?? role.createdAt ?? new Date(0).toISOString(),
-  };
-}
-
 function isContextFingerprint(value: unknown): value is CodexSessionContextFingerprint {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const fingerprint = value as { sessionId?: unknown; detectedAt?: unknown; source?: unknown };
@@ -913,13 +872,5 @@ function emptyTrustedRoutesDocument(): TrustedRoutesDocument {
     schemaVersion: LOCAL_STATE_SCHEMA_VERSION,
     updatedAt: new Date(0).toISOString(),
     trustedRoutes: [],
-  };
-}
-
-function emptyGroupAccessDocument(): GroupAccessDocument {
-  return {
-    schemaVersion: LOCAL_STATE_SCHEMA_VERSION,
-    updatedAt: new Date(0).toISOString(),
-    groups: [],
   };
 }

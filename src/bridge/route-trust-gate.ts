@@ -87,6 +87,7 @@ export class RouteTrustGate {
   }
 
   private shouldRequirePairing(message: ChannelMessage): boolean {
+    if (message.groupPolicy === "feishu" && message.conversation.kind === "group") return true;
     if (this.mode === "disabled") return false;
     if (this.mode === "pairing_required") return true;
     return isRealChannelId(message.channelId);

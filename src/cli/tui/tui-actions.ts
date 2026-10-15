@@ -183,6 +183,7 @@ export function createTuiActions({
             "按 y 确认，按 n 取消。",
           ].join(" "),
       yes: async () => {
+        try {
         const updated = await actions.setChannelGroupEnabled(channel.record.id, next);
         if (updated) {
           setDashboard((current) => current
@@ -198,6 +199,7 @@ export function createTuiActions({
           message: updated ? `已${next ? "开启" : "关闭"}飞书群聊接收。` : "这个渠道已经不存在。",
         });
         await refresh();
+        } catch (error) { setConfirm(undefined); setFlash({ kind: "error", message: error instanceof Error ? error.message : String(error) }); }
       },
     });
   };

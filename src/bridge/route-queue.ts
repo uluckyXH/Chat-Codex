@@ -28,6 +28,7 @@ import {
 } from "./formatters.js";
 
 export interface BridgeRouteQueueOptions {
+  preparePrompt?(message: ChannelMessage, input: CodexPromptInput, sendFile: boolean): CodexPromptInput | undefined;
   codex: CodexAdapter;
   state: MemoryStateStore;
   approvals: ApprovalManager;
@@ -55,6 +56,7 @@ export interface BridgeRouteQueueOptions {
 }
 
 export class BridgeRouteQueue {
+  private readonly preparePrompt?: BridgeRouteQueueOptions["preparePrompt"];
   private readonly codex: CodexAdapter;
   private readonly state: MemoryStateStore;
   private readonly approvals: ApprovalManager;
@@ -78,6 +80,7 @@ export class BridgeRouteQueue {
 
   constructor(options: BridgeRouteQueueOptions) {
     this.codex = options.codex;
+    this.preparePrompt = options.preparePrompt;
     this.state = options.state;
     this.approvals = options.approvals;
     this.logger = options.logger ?? new SilentLogger();
@@ -215,6 +218,7 @@ export class BridgeRouteQueue {
     sendFile: boolean,
     collaborationMode: CodexCollaborationMode | undefined,
   ): Promise<void> {
+    if (this.preparePrompt && this.preparePrompt(message, prompt, sendFile) === undefined) return;
     const refreshMode = this.contextRefresh?.effectivePolicy(message.routeKey).policy.mode;
     const staleBindingsCleared: StaleCodexSessionBindingInfo[] = [];
     const session = await this.sessionFlow.ensureSession(message, {
@@ -223,6 +227,7 @@ export class BridgeRouteQueue {
         staleBindingsCleared.push(info);
       },
     });
+    target = { ...target, context: { ...target.context, sessionId: session.id } };
     for (const stale of staleBindingsCleared) {
       await this.delivery.sendText(target, [
         "已清理失效的 Codex 会话绑定，已为本条消息创建新会话。",
@@ -272,10 +277,13 @@ export class BridgeRouteQueue {
           let lastDeliveredCommentaryText = "";
           let turnFailed = false;
           let currentTurnStartedAt: string | undefined;
+          const prepared = this.preparePrompt ? this.preparePrompt(message, prompt, sendFile) : prompt;
+          if (prepared === undefined) return;
+          prompt = prepared;
           const codexPrompt = sendFile
             ? typeof prompt === "string"
               ? withSendFileInstruction(prompt)
-              : withCodexInputText(prompt, withSendFileInstruction(promptText))
+              : withCodexInputText(prompt, withSendFileInstruction(codexInputText(prompt)))
             : prompt;
           for await (const event of this.codex.run(session.id, codexPrompt, collaborationMode ? { collaborationMode } : undefined)) {
             if (event.type === "turn.started") {
@@ -355,7 +363,7 @@ export class BridgeRouteQueue {
                 detail: event.approval.reason ?? event.approval.kind,
                 startedAt: currentTurnStartedAt,
               });
-              const pending = this.approvals.create(message.routeKey, message.sender.id, event.approval);
+              const pending = this.approvals.create(message.routeKey, message.sender.id, event.approval, message.groupPolicy === "feishu");
               await this.delivery.sendApprovalUntilDelivered(message.routeKey, target, pending);
             } else if (event.type === "approval.resolved") {
               this.approvals.resolveAdapterApproval(

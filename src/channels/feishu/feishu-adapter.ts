@@ -81,6 +81,11 @@ const SILENT_FEISHU_SDK_LOGGER = {
 };
 
 export class FeishuAdapter implements ChannelAdapter {
+  readonly groupPolicy = "feishu" as const;
+
+  async hydrateAttachments(message: ChannelMessage, authorize?: () => boolean): Promise<void> {
+    await downloadFeishuInboundAttachments({ client: this.ensureClient(), message, rootDir: this.inboundMediaRootDir, authorize });
+  }
   readonly id: string;
   readonly label = "Feishu Adapter";
   private readonly credentials: FeishuCredentials;
@@ -272,7 +277,9 @@ export class FeishuAdapter implements ChannelAdapter {
     }
     const client = this.ensureClient();
     try {
+      options?.beforeSend?.();
       const materialized = await materializeFeishuChannelMedia(media);
+      options?.beforeSend?.();
       if (media.caption?.trim()) {
         await this.sendText(target, media.caption.trim(), options);
       }
@@ -325,6 +332,7 @@ export class FeishuAdapter implements ChannelAdapter {
     let response: FeishuApiResponse<FeishuSentMessageData> | undefined;
     if (sourceMessageId) {
       try {
+        options?.beforeSend?.();
         response = await client.im.message.reply({
           path: { message_id: sourceMessageId },
           data: {
@@ -340,6 +348,7 @@ export class FeishuAdapter implements ChannelAdapter {
         this.recordSendError(error, "reply-failed");
       }
     }
+    options?.beforeSend?.();
     response = await client.im.message.create({
       params: { receive_id_type: "chat_id" },
       data: {
@@ -424,11 +433,7 @@ export class FeishuAdapter implements ChannelAdapter {
       };
       return;
     }
-    await downloadFeishuInboundAttachments({
-      client: this.ensureClient(),
-      message,
-      rootDir: this.inboundMediaRootDir,
-    });
+    if (message.conversation.kind !== "group") await this.hydrateAttachments(message);
     this.status = {
       ...this.status,
       lastInboundAt: message.timestamp,

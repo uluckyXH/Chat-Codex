@@ -12,6 +12,7 @@ import {
 import type { BridgeDelivery } from "./delivery.js";
 
 export interface BridgeRouteSteeringOptions {
+  preparePrompt?(message: ChannelMessage, input: CodexPromptInput): CodexPromptInput | undefined;
   codex: CodexAdapter;
   state: MemoryStateStore;
   logger: Logger;
@@ -24,6 +25,7 @@ export interface BridgeRouteSteeringOptions {
 }
 
 export class BridgeRouteSteering {
+  private readonly preparePrompt?: BridgeRouteSteeringOptions["preparePrompt"];
   private readonly codex: CodexAdapter;
   private readonly state: MemoryStateStore;
   private readonly logger: Logger;
@@ -37,6 +39,7 @@ export class BridgeRouteSteering {
 
   constructor(options: BridgeRouteSteeringOptions) {
     this.codex = options.codex;
+    this.preparePrompt = options.preparePrompt;
     this.state = options.state;
     this.logger = options.logger;
     this.delivery = options.delivery;
@@ -178,6 +181,11 @@ export class BridgeRouteSteering {
     if (!binding || !steer) {
       throw new Error("Codex adapter does not support steer for this route");
     }
+    batch = batch.flatMap((item) => {
+      const input = this.preparePrompt ? this.preparePrompt(item.message, item.input) : item.input;
+      return input === undefined ? [] : [{ ...item, input }];
+    });
+    if (!batch.length) return;
     await steer(binding.sessionId, composeSteerBatchInput(batch));
     await this.delivery.sendText(batch[batch.length - 1].target, steerAcceptedText(batch.length));
   }

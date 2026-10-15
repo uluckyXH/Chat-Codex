@@ -6,32 +6,32 @@ import type { ChannelMessage, ChannelTarget } from "../../src/protocol/channel.j
 import { MemoryStateStore } from "../../src/state/memory-state-store.js";
 import type { TrustedRouteRecord } from "../../src/state/persistent-state-types.js";
 
-test("handleGroupReceiveCommand rejects enabling Feishu group receive while it is not public", async () => {
+test("handleGroupReceiveCommand enables group receive from a trusted Feishu direct route", async () => {
   const fixture = commandFixture();
   fixture.state.trustRoute(trustedRoute(fixture.message));
 
   await handleGroupReceiveCommand(fixture.deps, fixture.message, fixture.target, ["on"], "group");
 
-  assert.deepEqual(fixture.setCalls, []);
-  assert.match(fixture.sent.at(-1) ?? "", /暂不支持开启群聊接收/);
+  assert.deepEqual(fixture.setCalls, [{ channelId: fixture.message.channelId, enabled: true }]);
+  assert.match(fixture.sent.at(-1) ?? "", /已开启飞书群聊接收/);
 });
 
-test("handleGroupReceiveCommand keeps hidden /grop alias disabled for the public release", async () => {
+test("handleGroupReceiveCommand keeps the hidden /grop alias for disabling receive", async () => {
   const fixture = commandFixture();
   fixture.state.trustRoute(trustedRoute(fixture.message));
 
   await handleGroupReceiveCommand(fixture.deps, fixture.message, fixture.target, ["off"], "grop");
 
-  assert.deepEqual(fixture.setCalls, []);
-  assert.match(fixture.sent.at(-1) ?? "", /暂不支持开启群聊接收/);
+  assert.deepEqual(fixture.setCalls, [{ channelId: fixture.message.channelId, enabled: false }]);
+  assert.match(fixture.sent.at(-1) ?? "", /已关闭飞书群聊接收/);
 });
 
-test("handleGroupReceiveCommand short-circuits Feishu routes before trust checks while disabled", async () => {
+test("handleGroupReceiveCommand rejects untrusted private chats and group chats", async () => {
   const untrusted = commandFixture();
   await handleGroupReceiveCommand(untrusted.deps, untrusted.message, untrusted.target, ["on"], "group");
 
   assert.deepEqual(untrusted.setCalls, []);
-  assert.match(untrusted.sent.at(-1) ?? "", /暂不支持开启群聊接收/);
+  assert.match(untrusted.sent.at(-1) ?? "", /还没有完成.*配对/);
 
   const group = commandFixture({
     routeKey: "feishu-default:default:group:oc_group",
@@ -41,7 +41,7 @@ test("handleGroupReceiveCommand short-circuits Feishu routes before trust checks
   await handleGroupReceiveCommand(group.deps, group.message, group.target, ["on"], "group");
 
   assert.deepEqual(group.setCalls, []);
-  assert.match(group.sent.at(-1) ?? "", /暂不支持开启群聊接收/);
+  assert.match(group.sent.at(-1) ?? "", /只能在已配对的飞书私聊/);
 });
 
 function commandFixture(options: { routeKey?: string; conversationKind?: "direct" | "group" } = {}) {

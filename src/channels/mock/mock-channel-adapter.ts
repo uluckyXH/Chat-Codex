@@ -45,6 +45,7 @@ export interface SentMockToolProgress {
 }
 
 export interface MockChannelAdapterOptions {
+  groupPolicy?: "feishu";
   id?: string;
   label?: string;
   accountId?: string;
@@ -56,6 +57,7 @@ export interface MockChannelAdapterOptions {
 }
 
 export class MockChannelAdapter implements ChannelAdapter {
+  get groupPolicy(): "feishu" | undefined { return this.options.groupPolicy; }
   readonly id: string;
   readonly label: string;
   readonly sentMessages: SentMockMessage[] = [];

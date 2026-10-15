@@ -33,6 +33,7 @@ export interface ChannelTarget {
 }
 
 export interface ChannelAttachment {
+  origin?: { senderId: string; displayName?: string; messageId: string; receivedAt: string; sequence: number };
   id: string;
   type: "image" | "voice" | "file" | "video" | "unknown";
   name?: string;
@@ -47,6 +48,8 @@ export interface ChannelAttachment {
 }
 
 export interface ChannelMessage {
+  /** Assigned by the registered adapter, never inferred from channel names. */
+  groupPolicy?: "feishu";
   id: string;
   routeKey: string;
   channelId: string;
@@ -147,6 +150,8 @@ export interface ChannelToolProgress {
 }
 
 export interface SendOptions {
+  /** Recheck authorization immediately before sending, including reply fallbacks. */
+  beforeSend?(): void;
   replyToMessageId?: string;
   correlationId?: string;
   metadata?: Record<string, unknown>;
@@ -163,6 +168,8 @@ export type ChannelMessageHandler = (message: ChannelMessage) => Promise<void>;
 export type ChannelApprovalActionHandler = (action: ChannelApprovalAction) => Promise<ChannelApprovalActionResult>;
 
 export interface ChannelAdapter {
+  readonly groupPolicy?: "feishu";
+  hydrateAttachments?(message: ChannelMessage, authorize?: () => boolean): Promise<void>;
   id: string;
   label: string;
   start(): Promise<void>;

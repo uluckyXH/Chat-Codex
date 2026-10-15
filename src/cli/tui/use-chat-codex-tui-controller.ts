@@ -141,6 +141,7 @@ export function useChatCodexTuiController(actions: LauncherActions): ChatCodexTu
     if (screen.name === "pairing") return Math.max(0, pairings.length - 1);
     if (screen.name === "pairingDetail") return currentPairing?.trusted ? 2 : 1;
     if (screen.name === "bindingDetail" && currentBinding?.trusted === false) return 1;
+    if (screen.name === "bindingDetail" && actions.supportsGroupManagement(screen.routeKey)) return 5;
     return maxSelectableIndex(screen, channels, bindingItems.length);
   };
 

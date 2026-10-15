@@ -22,11 +22,13 @@ export async function downloadFeishuInboundAttachments(params: {
   client: FeishuSdkClient;
   message: ChannelMessage;
   rootDir?: string;
+  authorize?: () => boolean;
 }): Promise<void> {
   if (!params.message.attachments || params.message.attachments.length === 0) return;
   const nextAttachments: ChannelAttachment[] = [];
   for (const attachment of params.message.attachments) {
-    nextAttachments.push(await downloadFeishuInboundAttachment(params.client, params.message, attachment, params.rootDir));
+    if (params.authorize && !params.authorize()) break;
+    nextAttachments.push(await downloadFeishuInboundAttachment(params.client, params.message, attachment, params.rootDir, params.authorize));
   }
   params.message.attachments = nextAttachments;
 }
@@ -154,6 +156,7 @@ async function downloadFeishuInboundAttachment(
   message: ChannelMessage,
   attachment: ChannelAttachment,
   rootDir?: string,
+  authorize?: () => boolean,
 ): Promise<ChannelAttachment> {
   if (attachment.type !== "image" && attachment.type !== "file") return attachment;
   const raw = feishuAttachmentRaw(attachment);
@@ -174,6 +177,7 @@ async function downloadFeishuInboundAttachment(
     });
     const data = await resourceToBuffer(resource);
     const contentType = headerValue(resource.headers, "content-type");
+    if (authorize && !authorize()) throw new Error("群附件接收权限已撤销");
     const saved = await saveInboundMedia({
       message,
       attachment: {

@@ -36,7 +36,7 @@ class CapturingTranscriptSink implements TranscriptSink {
 }
 
 test("Bridge blocks an untrusted Feishu direct chat until it sends the pairing code", async () => {
-  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const channel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "default" });
   const codex = new MockCodexAdapter();
   const state = new MemoryStateStore();
   const transcript = new CapturingTranscriptSink();
@@ -85,7 +85,7 @@ test("Bridge blocks an untrusted Feishu direct chat until it sends the pairing c
 });
 
 test("Bridge keeps Feishu pairing trust isolated by chat_id", async () => {
-  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const channel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "default" });
   const codex = new MockCodexAdapter();
   const state = new MemoryStateStore();
   const bridge = new Bridge({
@@ -114,7 +114,7 @@ test("Bridge keeps Feishu pairing trust isolated by chat_id", async () => {
 });
 
 test("Bridge lets Feishu group members register before route pairing but blocks prompts until paired", async () => {
-  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const channel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "default" });
   const codex = new MockCodexAdapter();
   const state = new MemoryStateStore();
   const bridge = new Bridge({
@@ -159,13 +159,13 @@ test("Bridge lets Feishu group members register before route pairing but blocks 
 
   assert.equal(state.isRouteTrusted("feishu:default:group:oc_group"), true);
   assert.equal(state.getGroupAccess("feishu:default:group:oc_group")?.superAdmin?.senderId, "ou_xh");
-  assert.equal(state.getGroupAccess("feishu:default:group:oc_group")?.approvalPolicy, "super_admin_only");
+  assert.equal(state.getGroupAccess("feishu:default:group:oc_group")?.approvalPolicy, "admins_only");
   assert.equal(codex.runs.at(-1)?.prompt, "小黄说：现在执行");
 });
 
 test("Bridge persists Feishu group pairer as super admin and shows it in whoami", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-group-access-"));
-  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const channel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "default" });
   const codex = new MockCodexAdapter();
   const state = new FileStateStore({ rootDir });
   const bridge = new Bridge({
@@ -198,11 +198,11 @@ test("Bridge persists Feishu group pairer as super admin and shows it in whoami"
   const routeKey = "feishu:default:group:oc_group_admin";
   assert.equal(new FileStateStore({ rootDir }).getGroupAccess(routeKey)?.superAdmin?.senderId, "ou_admin");
   assert.ok(channel.sentMessages.some((message) => message.text.includes("群角色: 超级管理员")));
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("审批策略: 仅超级管理员")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("审批策略: 超管和管理员")));
 });
 
 test("Bridge only lets the Feishu group super admin resolve approvals by default", async () => {
-  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const channel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "default" });
   const codex = new MockCodexAdapter();
   const state = new MemoryStateStore();
   const bridge = new Bridge({
@@ -228,7 +228,7 @@ test("Bridge only lets the Feishu group super admin resolve approvals by default
 
   await channel.emitText("/OK", { ...group, senderId: "ou_member" });
   assert.equal(codex.resolvedApprovals.length, 0);
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("默认只允许超级管理员")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("只有超管和管理员")));
 
   await channel.emitText("/OK", { ...group, senderId: "ou_admin" });
   await bridge.stop();
@@ -315,7 +315,7 @@ test("Bridge requires pairing for historical route bindings and keeps the existi
   });
   seedState.bindSession(routeKey, session);
 
-  const channel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const channel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "default" });
   const runtimeState = new FileStateStore({ rootDir });
   const bridge = new Bridge({
     channel,
@@ -347,7 +347,7 @@ test("Bridge requires pairing for historical route bindings and keeps the existi
 test("Bridge restores trusted routes from FileStateStore after restart", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-pairing-restart-"));
   const codex = new MockCodexAdapter();
-  const firstChannel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const firstChannel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "default" });
   const firstBridge = new Bridge({
     channel: firstChannel,
     codex,
@@ -363,7 +363,7 @@ test("Bridge restores trusted routes from FileStateStore after restart", async (
   await firstBridge.stop();
   assert.equal(codex.runs.length, 0);
 
-  const secondChannel = new MockChannelAdapter({ id: "feishu", accountId: "default" });
+  const secondChannel = new MockChannelAdapter({ groupPolicy: "feishu", id: "feishu", accountId: "default" });
   const secondBridge = new Bridge({
     channel: secondChannel,
     codex,

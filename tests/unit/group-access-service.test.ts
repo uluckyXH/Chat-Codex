@@ -17,7 +17,7 @@ test("GroupAccessService initializes super admin from trusted group route", () =
   assert.equal(record?.routeKey, "feishu:default:group:oc_group");
   assert.equal(record?.superAdmin?.senderId, "ou_admin");
   assert.equal(record?.superAdmin?.source, "pairing");
-  assert.equal(record?.approvalPolicy, "super_admin_only");
+  assert.equal(record?.approvalPolicy, "admins_only");
   assert.equal(record?.knownPrincipals?.[0]?.senderId, "ou_admin");
   assert.equal(state.getGroupAccess("feishu:default:group:oc_group")?.superAdmin?.senderId, "ou_admin");
 });
