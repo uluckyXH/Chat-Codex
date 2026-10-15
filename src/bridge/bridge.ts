@@ -515,6 +515,18 @@ export class Bridge {
       await this.commandRouter.handle(message, target, command.name ?? "", command.args, text);
       return;
     }
+    const channel = this.channels.get(message.channelId);
+    if (message.quotedMessage && channel?.hydrateQuotedMessage) {
+      const wasTrusted = this.state.isRouteTrusted(message.routeKey);
+      const authorize = () => !this.stopping
+        && (!wasTrusted || this.state.isRouteTrusted(message.routeKey))
+        && (!managedGroup || (!this.groupAccess.error() && this.state.isRouteTrusted(message.routeKey)
+          && !this.groupAccess.isSenderBlocked(message) && this.isFeishuGroupMemberRegistered(message)));
+      await channel.hydrateQuotedMessage(message, authorize);
+      if (!authorize()) return;
+      this.transcript?.quotedMessage?.(message);
+      attachments = classifyInboundAttachments(message.attachments);
+    }
     if (managedGroup) {
       await this.channels.get(message.channelId)?.hydrateAttachments?.(message, () => !this.groupAccess.error() && this.state.isRouteTrusted(message.routeKey) && !this.groupAccess.isSenderBlocked(message));
       if (this.groupAccess.isSenderBlocked(message) || !this.state.isRouteTrusted(message.routeKey)) return;

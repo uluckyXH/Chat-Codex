@@ -13,6 +13,7 @@ export function inboundContextLines(message: ChannelMessage): string[] {
     return lines;
   }
   lines.push(`引用正文: ${quoteSourceLabel(diagnostic)}`);
+  if (diagnostic.fetchCode !== undefined) lines.push(`读取错误码: ${diagnostic.fetchCode}`);
   if (diagnostic.selection !== "none") {
     lines.push(`局部引用: ${{
       restored: "已还原选中片段",
@@ -38,6 +39,17 @@ export function receiptContextLines(receipt?: TranscriptReceipt): string[] {
 function quoteSourceLabel(diagnostic: ChannelQuoteDiagnostics): string {
   if (diagnostic.source === "inline") return "微信已附带原文";
   if (diagnostic.source === "cache") return "本地缓存命中";
+  if (diagnostic.fetch) return {
+    pending: "等待读取原消息（命令或问答回复无需读取）",
+    success: "已从渠道读取原文",
+    missing: "接口未返回原消息",
+    deleted: "原消息已撤回或删除",
+    failed: "原消息不可访问或读取失败，请检查机器人消息读取权限及网络",
+    timeout: "读取原消息超时",
+    "chat-mismatch": "原消息不属于当前聊天，已忽略",
+    unsupported: "暂不支持读取该消息类型的引用内容",
+    empty: "原消息没有可读取的正文或附件",
+  }[diagnostic.fetch];
   return {
     miss: "本地缓存未命中（未记录或已清理，无法确认过期）",
     disabled: "引用缓存未启用",

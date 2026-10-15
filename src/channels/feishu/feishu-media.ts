@@ -8,6 +8,8 @@ export interface FeishuInboundAttachmentRaw {
   source: "feishu";
   fileKey: string;
   resourceType: "image" | "file";
+  /** A reply's media belongs to its parent message, not the current reply ID. */
+  messageId?: string;
 }
 
 export interface MaterializedFeishuMedia {
@@ -28,6 +30,7 @@ export async function downloadFeishuInboundAttachments(params: {
   const nextAttachments: ChannelAttachment[] = [];
   for (const attachment of params.message.attachments) {
     if (params.authorize && !params.authorize()) break;
+    if (attachment.downloadState === "available" && attachment.localPath) { nextAttachments.push(attachment); continue; }
     nextAttachments.push(await downloadFeishuInboundAttachment(params.client, params.message, attachment, params.rootDir, params.authorize));
   }
   params.message.attachments = nextAttachments;
@@ -171,7 +174,7 @@ async function downloadFeishuInboundAttachment(
     const resource = await client.im.messageResource.get({
       params: { type: raw.resourceType },
       path: {
-        message_id: message.id,
+        message_id: raw.messageId ?? message.id,
         file_key: raw.fileKey,
       },
     });
@@ -214,6 +217,7 @@ function feishuAttachmentRaw(attachment: ChannelAttachment): FeishuInboundAttach
     source: "feishu",
     fileKey: raw.fileKey,
     resourceType: raw.resourceType,
+    messageId: typeof raw.messageId === "string" && raw.messageId.trim() ? raw.messageId : undefined,
   };
 }
 

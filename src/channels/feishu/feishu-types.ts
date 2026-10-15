@@ -22,6 +22,7 @@ export interface FeishuAdapterOptions extends FeishuCredentials {
   now?: () => number;
   inboundMediaRootDir?: string;
   stateDir?: string;
+  quoteRequestTimeoutMs?: number;
 }
 
 export interface FeishuBotIdentity {
@@ -47,6 +48,15 @@ export interface FeishuSentMessageData {
   create_time?: string;
 }
 
+export interface FeishuRetrievedMessage {
+  message_id?: string;
+  chat_id?: string;
+  msg_type?: string;
+  deleted?: boolean;
+  body?: { content: string };
+  mentions?: Array<{ key: string; name: string }>;
+}
+
 export interface FeishuReactionData {
   reaction_id?: string;
 }
@@ -68,6 +78,10 @@ export interface FeishuResourceDownload {
 export interface FeishuSdkClient {
   im: {
     message: {
+      get(payload: {
+        path: { message_id: string };
+        params?: { user_id_type?: "open_id" };
+      }): Promise<FeishuApiResponse<{ items?: FeishuRetrievedMessage[] }>>;
       reply(payload: {
         data: {
           content: string;

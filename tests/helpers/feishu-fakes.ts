@@ -8,6 +8,7 @@ import type {
   FeishuReactionData,
   FeishuSdkClient,
   FeishuSentMessageData,
+  FeishuRetrievedMessage,
   FeishuTransportFactory,
   FeishuWsCallbacks,
   FeishuWsClient,
@@ -16,6 +17,9 @@ import type {
 import { Readable } from "node:stream";
 
 export class FakeFeishuClient implements FeishuSdkClient {
+  readonly messageGetPayloads: Array<Parameters<FeishuSdkClient["im"]["message"]["get"]>[0]> = [];
+  messageGetResponse: FeishuApiResponse<{ items?: FeishuRetrievedMessage[] }> = { code: 0, data: { items: [] } };
+  messageGetHandler?: FeishuSdkClient["im"]["message"]["get"];
   readonly replyPayloads: Array<Parameters<FeishuSdkClient["im"]["message"]["reply"]>[0]> = [];
   readonly createPayloads: Array<Parameters<FeishuSdkClient["im"]["message"]["create"]>[0]> = [];
   readonly imageCreatePayloads: Array<Parameters<FeishuSdkClient["im"]["image"]["create"]>[0]> = [];
@@ -65,6 +69,10 @@ export class FakeFeishuClient implements FeishuSdkClient {
 
   im = {
     message: {
+      get: async (payload: Parameters<FeishuSdkClient["im"]["message"]["get"]>[0]) => {
+        this.messageGetPayloads.push(payload);
+        return this.messageGetHandler ? this.messageGetHandler(payload) : this.messageGetResponse;
+      },
       reply: async (payload: Parameters<FeishuSdkClient["im"]["message"]["reply"]>[0]): Promise<FeishuApiResponse<FeishuSentMessageData>> => {
         this.replyPayloads.push(payload);
         if (this.replyError) throw this.replyError;

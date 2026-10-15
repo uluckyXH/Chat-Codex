@@ -6,6 +6,7 @@ import { inboundContextLines, receiptContextLines, type TranscriptReceipt } from
 
 export interface TranscriptSink {
   inbound(message: ChannelMessage, text: string): void;
+  quotedMessage?(message: ChannelMessage): void;
   outbound(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void;
   observedCommentary?(target: ChannelTarget, text: string): void;
   outboundCommentary?(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void;
@@ -57,6 +58,13 @@ export class ConsoleTranscriptSink implements TranscriptSink {
       this.verbose ? `sender: ${message.sender.id}` : undefined,
       ...inboundContextLines(message).map((line) => `  ${line}`),
       ...this.bodyLines(text, tone),
+    ]);
+  }
+
+  quotedMessage(message: ChannelMessage): void {
+    this.writeBlock([
+      this.header(transcriptChannelLabel(message.channelId), "--", transcriptInboundSubject(message), "引用恢复", "inbound"),
+      ...inboundContextLines(message).map((line) => `  ${line}`),
     ]);
   }
 

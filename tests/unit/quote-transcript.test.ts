@@ -58,6 +58,48 @@ test("quote metadata stays visible for long messages and escapes control charact
   assert.match(f.output(), /已截断/);
 });
 
+test("Feishu delayed quote logs distinguish remote recovery failures without exposing quoted bodies", () => {
+  const cases: Array<[NonNullable<ChannelQuoteDiagnostics["fetch"]>, RegExp]> = [
+    ["success", /已从渠道读取原文/],
+    ["missing", /接口未返回原消息/],
+    ["deleted", /原消息已撤回或删除/],
+    ["failed", /读取失败[\s\S]*读取错误码: 999/],
+    ["timeout", /读取原消息超时/],
+    ["chat-mismatch", /原消息不属于当前聊天/],
+    ["unsupported", /暂不支持读取/],
+    ["empty", /没有可读取的正文或附件/],
+  ];
+  for (const [fetch, expected] of cases) {
+    const f = sinks();
+    const resolved: ChannelMessage = {
+      ...message, channelId: "feishu", id: "om_reply",
+      quotedMessage: { messageId: "om_parent", text: "private-history" },
+      quoteDiagnostics: { source: fetch === "success" ? "remote" : "unavailable", cache: "not-needed", fetch, selection: "none", media: "none", ...(fetch === "failed" ? { fetchCode: 999 } : {}) },
+    };
+    f.consoleSink.quotedMessage(resolved);
+    f.tuiSink.quotedMessage(resolved);
+    assert.equal(f.store.snapshot()[0].kind, "quote");
+    for (const output of [f.output(), f.store.snapshot()[0].message]) {
+      assert.match(output, /消息 ID: om_reply/);
+      assert.match(output, /引用消息 ID: om_parent/);
+      assert.match(output, expected);
+      assert.doesNotMatch(output, /private-|解释这个/);
+    }
+  }
+});
+
+test("Feishu receive log marks quote lookup as pending instead of claiming a cache miss", () => {
+  const f = sinks();
+  const pending: ChannelMessage = { ...message, channelId: "feishu", quoteDiagnostics: { source: "unavailable", cache: "not-needed", fetch: "pending", selection: "none", media: "none" } };
+  f.consoleSink.inbound(pending, "本次要求");
+  f.tuiSink.inbound(pending, "本次要求");
+  for (const output of [f.output(), f.store.snapshot()[0].message]) {
+    assert.match(output, /等待读取原消息/);
+    assert.match(output, /命令或问答回复无需读取/);
+    assert.doesNotMatch(output, /过期|未命中|private-/);
+  }
+});
+
 test("all delivered transcript kinds expose server receipts while local observations have no fabricated receipts", () => {
   const f = sinks();
   const receipt: SendResult = { channelId: "weixin", messageId: "client-1", serverMessageId: "18446744073709551615", deliveredAt: "now", raw: { context_token: "private-token" } };

@@ -36,6 +36,7 @@ import {
   normalizeFeishuCredentials,
 } from "./feishu-message.js";
 import { FeishuApprovalCardController } from "./feishu-approval-card-controller.js";
+import { hydrateFeishuQuote } from "./feishu-quotes.js";
 import { FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED } from "./feishu-feature-flags.js";
 import {
   downloadFeishuInboundAttachments,
@@ -83,6 +84,11 @@ const SILENT_FEISHU_SDK_LOGGER = {
 export class FeishuAdapter implements ChannelAdapter {
   readonly groupPolicy = "feishu" as const;
 
+  async hydrateQuotedMessage(message: ChannelMessage, authorize: () => boolean): Promise<void> {
+    await hydrateFeishuQuote({ client: this.ensureClient(), message, authorize,
+      rootDir: this.inboundMediaRootDir, timeoutMs: this.quoteRequestTimeoutMs });
+  }
+
   async hydrateAttachments(message: ChannelMessage, authorize?: () => boolean): Promise<void> {
     await downloadFeishuInboundAttachments({ client: this.ensureClient(), message, rootDir: this.inboundMediaRootDir, authorize });
   }
@@ -90,6 +96,7 @@ export class FeishuAdapter implements ChannelAdapter {
   readonly label = "Feishu Adapter";
   private readonly credentials: FeishuCredentials;
   private readonly sourceVersion: string;
+  private readonly quoteRequestTimeoutMs?: number;
   private readonly connectOnStart: boolean;
   private readonly probeOnStart: boolean;
   private readonly staleMessageMs: number;
@@ -113,6 +120,7 @@ export class FeishuAdapter implements ChannelAdapter {
     this.id = options.id ?? FEISHU_CHANNEL_ID;
     this.credentials = normalizeFeishuCredentials(options);
     this.sourceVersion = options.sourceVersion ?? DEFAULT_SOURCE_VERSION;
+    this.quoteRequestTimeoutMs = options.quoteRequestTimeoutMs;
     this.connectOnStart = options.connectOnStart ?? true;
     this.probeOnStart = options.probeOnStart ?? true;
     this.staleMessageMs = options.staleMessageMs ?? DEFAULT_FEISHU_STALE_MESSAGE_MS;

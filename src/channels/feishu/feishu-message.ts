@@ -151,13 +151,15 @@ export function feishuEventToChannelMessage(
     return { ok: false, reason: "empty_message" };
   }
   if (message.chat_type === "group") {
-    return feishuGroupEventToChannelMessage(event, options, {
+    const result = feishuGroupEventToChannelMessage(event, options, {
       senderId,
       senderDisplayName,
       text: parsedContent.text,
       attachments: parsedContent.attachments,
       timestamp: formatFeishuTimestamp(message.create_time, options.now),
     });
+    if (result.ok) attachReplyReference(result.message, message.parent_id);
+    return result;
   }
   const routeKey = buildRouteKey({
     channelId: options.channelId,
@@ -184,7 +186,15 @@ export function feishuEventToChannelMessage(
     timestamp,
     raw: event,
   };
+  attachReplyReference(channelMessage, message.parent_id);
   return { ok: true, message: channelMessage };
+}
+
+function attachReplyReference(message: ChannelMessage, parentId?: string): void {
+  const id = parentId?.trim();
+  if (!id || id === message.id) return;
+  message.quotedMessage = { messageId: id, text: "[用户回复了历史消息，原文尚未读取]" };
+  message.quoteDiagnostics = { source: "unavailable", cache: "not-needed", fetch: "pending", selection: "none", media: "none" };
 }
 
 function isSupportedFeishuMessageType(messageType: string): boolean {
@@ -204,15 +214,26 @@ function parseFeishuContentJson(content: string): unknown {
 function parseFeishuPostContent(parsed: unknown): ParsedFeishuMessageContent {
   const attachments: ChannelAttachment[] = [];
   const textParts: string[] = [];
+  // Receive/get responses can be normalized or retain the language wrapper used on send.
+  if (!Array.isArray(objectField(parsed, "content")) && parsed && typeof parsed === "object") {
+    const localized = [objectField(parsed, "zh_cn"), objectField(parsed, "en_us"), ...Object.values(parsed)]
+      .find((item) => Array.isArray(objectField(item, "content")));
+    if (localized) parsed = localized;
+  }
+  const title = stringField(parsed, "title");
+  if (title) textParts.push(title);
   const content = objectField(parsed, "content");
   if (Array.isArray(content)) {
     for (const line of content) {
       if (!Array.isArray(line)) continue;
+      const lineParts: string[] = [];
       for (const item of line) {
         const tag = stringField(item, "tag");
-        const text = firstStringField(item, "text", "name");
-        if (text && (tag === "text" || tag === "a" || tag === "at")) {
-          textParts.push(text);
+        const label = firstStringField(item, "text", "name");
+        const href = tag === "a" ? stringField(item, "href") : undefined;
+        const text = href && href !== label ? (label ? `${label} (${href})` : href) : label;
+        if (text && (tag === "text" || tag === "a" || tag === "at" || tag === "md" || tag === "code_block")) {
+          lineParts.push(text);
         }
         const imageKey = stringField(item, "image_key");
         if (imageKey) {
@@ -237,9 +258,10 @@ function parseFeishuPostContent(parsed: unknown): ParsedFeishuMessageContent {
           }));
         }
       }
+      if (lineParts.length) textParts.push(lineParts.join(""));
     }
   }
-  const text = textParts.join("").trim() || undefined;
+  const text = textParts.join("\n").trim() || undefined;
   return { text, attachments };
 }
 

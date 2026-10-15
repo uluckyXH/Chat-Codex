@@ -15,7 +15,7 @@ import { formatCodexCommandSource, formatCodexPlatform } from "../../codex/codex
 import { formatLocalClock } from "../../time/display-time.js";
 import { Frame, KeyValue, Muted, Section, THEME } from "./ui-components.js";
 
-export type RuntimeLogKind = "system" | "inbound" | "outbound" | "progress" | "commentary" | "media" | "warn" | "error";
+export type RuntimeLogKind = "system" | "inbound" | "quote" | "outbound" | "progress" | "commentary" | "media" | "warn" | "error";
 
 export interface RuntimeLogEntry {
   id: number;
@@ -81,6 +81,10 @@ export class RuntimeTuiTranscriptSink implements TranscriptSink {
 
   inbound(message: ChannelMessage, text: string): void {
     this.store.add("inbound", `${transcriptChannelLabel(message.channelId)} <= ${transcriptInboundSubject(message)} | ${transcriptInboundDetail(message)}`, [...inboundContextLines(message), text].join("\n"));
+  }
+
+  quotedMessage(message: ChannelMessage): void {
+    this.store.add("quote", `${transcriptChannelLabel(message.channelId)} -- ${transcriptInboundSubject(message)} | 引用恢复`, inboundContextLines(message).join("\n"));
   }
 
   outbound(target: ChannelTarget, text: string, receipt?: TranscriptReceipt): void {
@@ -236,6 +240,7 @@ function runtimeLogLines(entry: RuntimeLogEntry, width: number): RuntimeLogLine[
 function runtimeLogColor(kind: RuntimeLogKind): string {
   if (kind === "error") return THEME.danger;
   if (kind === "inbound") return THEME.inbound;
+  if (kind === "quote") return THEME.inbound;
   if (kind === "outbound") return THEME.outbound;
   if (kind === "progress") return THEME.progressLog;
   if (kind === "commentary") return THEME.progressLog;
@@ -247,6 +252,7 @@ function runtimeLogColor(kind: RuntimeLogKind): string {
 function kindLabel(kind: RuntimeLogKind): string {
   if (kind === "system") return "系统";
   if (kind === "inbound") return "收到";
+  if (kind === "quote") return "引用";
   if (kind === "outbound") return "发送";
   if (kind === "progress") return "进度";
   if (kind === "commentary") return "旁白";

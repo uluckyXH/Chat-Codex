@@ -45,7 +45,7 @@
 - 微信缓存：`lookup()` 区分 `hit/miss/disabled/unavailable`，旧 `find()` 保留兼容。缺少缓存目录和引用 ID 由 adapter 区分。
 - 展示：`src/logging/message-context.ts` 统一生成中文诊断，Console／TUI 共同使用；`BridgeDelivery` 只传递已有回执，不增加发送请求。
 - 真实微信手机端仍未联调；本次没有读取真实用户的历史日志、登录态或发送测试消息。所引述的那次失败尚不能定位为具体缓存原因，需新日志证据。
-- 代码在工作区，尚未 commit／push；重新构建并重启使用这份源码的服务后才会看到新日志，当前运行的进程没有被改动。
+- 2026-10-15 后续已随 Codex／微信协议适配提交并推送到 `origin/main`，检查点 `2aa8101`。重新构建并重启使用这份源码的服务后才会看到新日志，当前运行的进程没有被改动。
 
 ## 引用输入策略与飞书现状补充
 
@@ -53,7 +53,7 @@
 
 微信原文由中间件从入站附带内容或按消息 ID 查询本地缓存取得，然后由 `textWithQuotedMessage()` 附加到普通 Codex 输入。只处理被引用的消息，不因引用额外重载整段会话历史。
 
-飞书源码核对：出站 `FeishuAdapter.sendFeishuMessage()` 已优先调用 `im.message.reply` 回复来源消息，失败后退回普通发送；入站事件虽声明 `parent_id/root_id`，但私聊与群聊映射均未据此读取父消息正文，也未构造 `quotedMessage`。因此“机器人能回复飞书消息”已经实现，“用户回复旧消息后自动把原文给 Codex”尚未适配。未来对齐时可复用通用引用输入入口；本次仅记录现状，没有改动飞书收发代码。
+本批日志工作完成时的飞书现状：出站 `FeishuAdapter.sendFeishuMessage()` 已优先调用 `im.message.reply` 回复来源消息，失败后退回普通发送；当时入站仍未按 `parent_id` 读取父消息正文。用户随后确认补齐此项；现在私聊与群聊已通过权限后的引用恢复 hook 读取直接父消息，接入现有 `quotedMessage`，并追加本地恢复状态日志。实现、使用方式和 655 项全量测试见[飞书入站回复原文适配](2026-10-15-feishu-reply-context-adaptation.zh-CN.md)。
 
 ## 日志后续整理方向
 

@@ -67,8 +67,10 @@ export interface ChannelMessage {
 }
 
 export interface ChannelQuoteDiagnostics {
-  source: "inline" | "cache" | "unavailable";
+  source: "inline" | "cache" | "remote" | "unavailable";
   cache: "not-needed" | "hit" | "miss" | "disabled" | "unavailable" | "not-configured" | "missing-id";
+  fetch?: "pending" | "success" | "missing" | "deleted" | "failed" | "timeout" | "chat-mismatch" | "unsupported" | "empty";
+  fetchCode?: number;
   selection: "none" | "restored" | "fallback" | "unavailable";
   media: "none" | "available" | "unavailable";
 }
@@ -181,6 +183,8 @@ export type ChannelApprovalActionHandler = (action: ChannelApprovalAction) => Pr
 
 export interface ChannelAdapter {
   readonly groupPolicy?: "feishu";
+  /** Called for ordinary prompts only, after admission and command/answer handling. */
+  hydrateQuotedMessage?(message: ChannelMessage, authorize: () => boolean): Promise<void>;
   hydrateAttachments?(message: ChannelMessage, authorize?: () => boolean): Promise<void>;
   id: string;
   label: string;
