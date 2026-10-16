@@ -4,6 +4,9 @@
 
 ## 文档用途
 
+- `releases/v0.1.7.zh-CN.md`
+  Chat-Codex 0.1.7 发布说明，修复 Issue #7 自动审批成功提示刷屏；提供可点击修复提交、验证结果与升级命令。发布状态与 npm 手动发布步骤见 `reports/tests/2026-10-16-release-0.1.7.md`。
+
 - `2026-10-16-auto-review-notification-delivery-design.zh-CN.md`
   Issue #7 自动审批成功提示刷屏的排查、实现与进度。明确的成功提示仅写本机日志，保留人工审批、异常和未知安全通知；覆盖微信／飞书、前后台及官方 TUI 对照。95 项定向、742 项全量和 9 组独立安装包检查已通过；保留修复前探针证据，见 `reports/tests/2026-10-16-issue-7-auto-review-notifications.md`。
 

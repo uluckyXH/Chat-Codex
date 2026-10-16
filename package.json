@@ -1,6 +1,6 @@
 {
   "name": "chat-codex",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Connect local Codex to Weixin and Feishu through a terminal TUI.",
   "author": "小黄 and Codex",
   "license": "MIT",
