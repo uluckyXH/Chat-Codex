@@ -28,6 +28,10 @@ export class BridgeNotificationDelivery {
     const { routeKey, target, event } = input;
     const text = this.applyLifecycleState(routeKey, event) ?? event.notification.text;
     if (this.isDuplicate(routeKey, event)) return;
+    if (event.notification.visibility === "local") {
+      this.delivery.logLocalNotification(target, event);
+      return;
+    }
     this.state.recordCodexNotification({
       sessionId: event.sessionId,
       method: event.notification.method,

@@ -1,4 +1,4 @@
-import type { CodexProgressKind, CodexTurnError } from "../types.js";
+import type { CodexNotification, CodexProgressKind, CodexTurnError } from "../types.js";
 import { commandExecutionProgress } from "./command-output-summary.js";
 import { arrayValue, numberValue, objectValue, stringValue } from "./value-parsers.js";
 import { isAbsolute, win32 } from "node:path";
@@ -7,6 +7,41 @@ export interface AppServerReconnectNotice {
   message: string;
   attempt: number;
   total: number;
+}
+
+export function notificationText(
+  method: string,
+  params: Record<string, unknown>,
+): Pick<CodexNotification, "text" | "kind" | "dedupeWindowMs" | "visibility"> | undefined {
+  if (method === "warning") {
+    const message = stringValue(params.message);
+    return message ? { text: `Codex 警告：${message}`, kind: "warning", dedupeWindowMs: 10 * 60_000 } : undefined;
+  }
+  if (method === "guardianWarning") {
+    const message = stringValue(params.message);
+    if (!message) return undefined;
+    // Match the official Codex TUI's success notice prefix; other guardian warnings stay visible.
+    const visibility = message.startsWith("Automatic approval review approved (") ? "local" : "channel";
+    return { text: `Codex 安全提示：${message}`, kind: "security", visibility, dedupeWindowMs: 10 * 60_000 };
+  }
+  if (method === "deprecationNotice") {
+    const summary = stringValue(params.summary);
+    const details = stringValue(params.details);
+    const text = summary ? [`Codex 兼容性提示：${summary}`, details].filter(Boolean).join("\n") : undefined;
+    return text ? { text, kind: "deprecation", dedupeWindowMs: 30 * 60_000 } : undefined;
+  }
+  if (method === "configWarning") {
+    const summary = stringValue(params.summary);
+    const details = stringValue(params.details);
+    const configPath = stringValue(params.path);
+    const text = summary ? [`Codex 配置警告：${summary}`, details, configPath ? `Path: ${configPath}` : undefined].filter(Boolean).join("\n") : undefined;
+    return text ? { text, kind: "config", dedupeWindowMs: 30 * 60_000 } : undefined;
+  }
+  if (method === "windows/worldWritableWarning") {
+    const message = stringValue(params.message) ?? stringValue(params.summary);
+    return message ? { text: `Codex Windows 沙箱警告：${message}`, kind: "warning", dedupeWindowMs: 30 * 60_000 } : undefined;
+  }
+  return undefined;
 }
 
 export function messagePhaseValue(value: unknown): "commentary" | "partial_answer" | "final_answer" | undefined {

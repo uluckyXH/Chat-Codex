@@ -441,6 +441,9 @@ rl.on("line", (line) => {
     if (prompt.includes("status notifications")) {
       send({ method: "thread/name/updated", params: { threadId, threadName: "Renamed Thread" } });
       send({ method: "warning", params: { threadId, message: "配置即将变化" } });
+      send({ method: "guardianWarning", params: { threadId, message: "Automatic approval review approved (risk: medium, authorization: high): Safe local edit." } });
+      send({ method: "guardianWarning", params: { threadId, visibility: "local", message: "Automatic approval review denied (risk: high, authorization: low): Unsafe action." } });
+      send({ method: "guardianWarning", params: { threadId, message: "Unknown guardian warning." } });
       send({ method: "model/rerouted", params: { threadId, turnId, fromModel: "fake", toModel: "fake-next", reason: "highRiskCyberActivity" } });
       send({ method: "model/verification", params: { threadId, turnId, verifications: ["trustedAccessForCyber"] } });
       send({ method: "model/safetyBuffering/updated", params: { threadId, turnId, model: "fake-next", useCases: ["security"], reasons: ["classifier"], showBufferingUi: true, fasterModel: "fake" } });
@@ -716,6 +719,13 @@ test("AppServerCodexAdapter maps status notifications into session state and not
   assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("From: fake") && event.notification.text.includes("To: fake-next")));
   assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("trustedAccessForCyber")));
   assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("模型安全缓冲") && event.notification.text.includes("fake-next")));
+  const guardian = events.filter((event): event is Extract<CodexEvent, { type: "codex.notification" }> => event.type === "codex.notification" && event.notification.method === "guardianWarning");
+  assert.equal(guardian.length, 3);
+  assert.deepEqual(guardian.map((event) => event.notification.visibility), ["local", "channel", "channel"]);
+  const started = events.find((event) => event.type === "turn.started");
+  assert.ok(started);
+  assert.ok(guardian.every((event) => event.sessionId === session.id && event.turnId === started.turnId));
+  assert.ok(guardian[0].notification.text.endsWith("Safe local edit."));
 });
 
 test("AppServerCodexAdapter sets thread names through app-server", async () => {

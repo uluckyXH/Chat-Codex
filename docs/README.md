@@ -4,6 +4,9 @@
 
 ## 文档用途
 
+- `2026-10-16-auto-review-notification-delivery-design.zh-CN.md`
+  Issue #7 自动审批成功提示刷屏的排查、实现与进度。明确的成功提示仅写本机日志，保留人工审批、异常和未知安全通知；覆盖微信／飞书、前后台及官方 TUI 对照。95 项定向、742 项全量和 9 组独立安装包检查已通过；保留修复前探针证据，见 `reports/tests/2026-10-16-issue-7-auto-review-notifications.md`。
+
 - `releases/v0.1.6.zh-CN.md`
   Chat-Codex 0.1.6 发布说明，沿用 0.1.5 的安装／升级、新增、优化、修复及相关提交格式；覆盖上次发布以来的 Codex、微信、飞书与旁白改动。发布验证与实际结果见 `reports/tests/2026-10-16-release-0.1.6.md`。
 
@@ -146,7 +149,7 @@
   Codex 权限模式对齐设计。说明 Chat-Codex 用户可见权限只收敛为 `approval`、`approve-for-me`、`full` 三个模式，`read-only` 只作为底层诊断信息，不作为聊天命令或默认 TUI 选项。
 
 - `codex-app-server-notification-routing-design.zh-CN.md`
-  Codex app-server 通知路由设计。说明 thread archive/close/name update、guardianWarning、warning、configWarning、model reroute/verification 等通知如何在聊天渠道、状态和运行日志之间分流；安全通知要求完整推送，`item/tool/requestUserInput` 另行讨论。
+  Codex app-server 通知路由设计。说明 thread archive/close/name update、guardianWarning、warning、configWarning、model reroute/verification 等通知如何分流；已实现的自动审批成功提示本地降噪例外见 `2026-10-16-auto-review-notification-delivery-design.zh-CN.md`。
 
 - `codex-app-server-reconnect-notification-design.zh-CN.md`
   Codex app-server 重连提示独立通知设计。说明如何把 `Reconnecting... n/m` 从普通 progress 中结构化识别出来，保留本地进度可见性，并在最后一次重连尝试时通过 `codex.notification kind=connection` 主动通知微信/飞书。
@@ -278,7 +281,7 @@ secrets/feishu.local.md
 14. 做 `/compact` 聊天命令时读 `compact-command-design.zh-CN.md`，确认确认流程、当前 route/session 作用域、执行中通知和命令阻断规则。
 15. 做隐藏的 `/new chat` 实现、Codex App 对话列表可见性、App thread 标题同步或首条 prompt 创建对话时读 `new-chat-app-conversation-design.zh-CN.md`。
 16. 做 Codex app-server 新版本协议适配、thread API、server request 稳定性或最新模型适配时读 `codex-new-version-adaptation-design.zh-CN.md` 和 `codex-2026-07-latest-adaptation-design.zh-CN.md`；其中 2026-07 文档更新了 GPT-5.6、开放 reasoning effort、service tier 和最新 schema 漂移判断。
-17. 做 Codex app-server notification 路由、安全通知完整推送、thread archive/close 主动提示或模型路由提示时读 `codex-app-server-notification-routing-design.zh-CN.md`。
+17. 做 Codex app-server notification 路由、安全通知、thread archive/close 主动提示或模型路由提示时读 `codex-app-server-notification-routing-design.zh-CN.md`；处理自动审批成功提示刷屏时同时读 `2026-10-16-auto-review-notification-delivery-design.zh-CN.md`，区分当前行为和待实施方案。
 18. 做 Codex app-server `Reconnecting... n/m` 连接恢复提示、普通进度和强通知分流时读 `codex-app-server-reconnect-notification-design.zh-CN.md`。
 19. 做 Codex `item/tool/requestUserInput`、聊天侧 `/a数字` 回答、pending input 锁或群聊发起人回答规则时读 `codex-request-user-input-design.zh-CN.md`。
 20. 做 `/sessions`、`/session`、`/sessions all`、`/resume` 或 `/use` 会话列表/选择交互时读 `session-list-pagination-design.zh-CN.md`；如果涉及 Codex app-server `thread/list` / `thread/read` 数据源适配，同时读 `codex-app-server-thread-list-sessions-design.zh-CN.md`。

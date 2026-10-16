@@ -95,6 +95,40 @@ try {
   `], temp);
   checks.push("10 protocol, commentary, question, group and channel modules load from the installed package");
 
+  run(process.execPath, ["--input-type=module", "-e", `
+    import assert from 'node:assert/strict';
+    import { pathToFileURL } from 'node:url';
+    const root = ${JSON.stringify(path.join(installed, "dist/src"))};
+    const load = (file) => import(pathToFileURL(root + '/' + file).href);
+    const { notificationText } = await load('codex/app-server/notification-mapper.js');
+    const { BridgeNotificationDelivery } = await load('bridge/notification-delivery.js');
+    const { BridgeDelivery } = await load('bridge/delivery.js');
+    const { MemoryStateStore } = await load('state/memory-state-store.js');
+    const { ApprovalManager } = await load('approvals/approval-manager.js');
+    const sent = [], logs = [];
+    const delivery = new BridgeDelivery({
+      channels: { sendText: async (_target, text) => { sent.push(text); return {}; } },
+      logger: { info: (message, meta) => logs.push({message, meta}), warn() {}, error() {}, debug() {} },
+      approvals: new ApprovalManager(), approvalSendRetryDelayMs: 1,
+    });
+    const router = new BridgeNotificationDelivery({state: new MemoryStateStore(), delivery});
+    const target = {channelId: 'mock', routeKey: 'route', recipient: {id: 'user'}, conversation: {id: 'user', kind: 'direct'}};
+    for (const message of [
+      'Automatic approval review approved (risk: low, authorization: high): Safe action.',
+      'Automatic approval review denied (risk: high, authorization: low): Unsafe action.',
+    ]) {
+      await router.deliver({routeKey: 'route', target, event: {type: 'codex.notification', sessionId: 'session', turnId: 'turn',
+        notification: {method: 'guardianWarning', ...notificationText('guardianWarning', {message}), dedupeKey: message}}});
+    }
+    await delivery.sendText(target, 'final');
+    assert.equal(logs.length, 1);
+    assert.match(logs[0].meta.text, /approved/);
+    assert.equal(sent.length, 2);
+    assert.match(sent[0], /denied/);
+    assert.equal(sent[1], 'final');
+  `], temp);
+  checks.push("installed auto-review success stays local while rejection and final text are delivered");
+
   const result = { name: packed.name, version: packed.version, checks, dependencies, size: packed.size, unpackedSize: packed.unpackedSize, entryCount: packed.entryCount, runtimeModules: expectedModules.length, integrity, shasum: packed.shasum, ...(keep ? { tarball, installPrefix: prefix } : {}) };
   fs.writeFileSync(path.join(temp, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
   console.log(JSON.stringify(result, null, 2));

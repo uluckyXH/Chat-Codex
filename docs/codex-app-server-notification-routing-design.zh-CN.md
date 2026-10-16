@@ -1,5 +1,7 @@
 # Codex app-server 通知路由设计
 
+2026-10-16 更新：已实现 Issue #7 的自动审批成功提示例外，明确成功的 `guardianWarning` 仅记本机 INFO 日志；异常和未知内容仍按原策略投递。详见[实现与验证进度](2026-10-16-auto-review-notification-delivery-design.zh-CN.md)。
+
 ## 背景
 
 新版 Codex app-server 会通过 `ServerNotification` 主动通知客户端 thread 生命周期、执行过程、模型路由、配置警告和安全提示。Chat-Codex 作为微信/飞书聊天桥接，需要把这些通知分成三类处理：
@@ -12,7 +14,7 @@
 
 ## 目标
 
-- 安全相关通知完整推送到对应聊天渠道。
+- 需要渠道展示的安全通知完整推送；明确的自动审批成功提示仅记本机日志。
 - thread 归档/关闭要让用户明确知道当前绑定不可继续使用，并给出 `/new`、`/resume` 路径。
 - 普通状态变化尽量不打扰用户，只更新本地 session 状态。
 - 模型实际切换、配置异常等会影响用户理解执行结果的信息，要低频但明确地提示。
@@ -68,7 +70,7 @@ Codex app-server 内部 thread 状态变化
 
 | 通知 | 推送策略 | 内容要求 |
 | --- | --- | --- |
-| `guardianWarning` | 推送到当前 route/channel | 完整保留 Codex 给出的 `message` |
+| `guardianWarning` 的拒绝／失败／超时／未知内容 | 推送到当前 route/channel | 完整保留 Codex 给出的 `message` |
 | `model/verification` | 推送到当前 route/channel | 完整列出 `verifications` |
 | `model/rerouted` | 推送到当前 turn 所属 route/channel | 完整展示 `fromModel`、`toModel`、`reason` |
 | 安全类 `warning` | 推送到当前 route/channel | 完整保留 `message` |
@@ -81,6 +83,8 @@ Codex app-server 内部 thread 状态变化
 - 推送失败时写入运行日志和 transcript，后续 `/status` 应能暴露最近安全通知摘要。
 
 第一版无法可靠判断 `warning` 是否安全类时，采取保守策略：所有 `warning` 都推送，但做去重，避免同一条消息刷屏。
+
+`guardianWarning` 的原始 `message` 以 `Automatic approval review approved (` 开头时，内部标记 `visibility=local`，去重后只记录 INFO 日志，不进入发送队列，也不占用 `/status` 最近重要通知位置。该判断与官方 TUI 的成功提示过滤一致；不按整个安全类别、权限模式或正文中任意位置的 `approved` 字样过滤。
 
 ### 需要主动提示
 
@@ -164,7 +168,7 @@ Codex app-server 内部 thread 状态变化
 
 - key: `method + threadId + turnId + message/reason/verifications`
 - 同一 key 在 10 分钟内只推送一次。
-- 不同安全通知必须分别推送。
+- 不同的渠道可见安全通知分别推送；自动审批成功通知仅在本地去重记录。
 - 长消息按渠道长度限制分段，不做摘要。
 
 普通 warning/config/deprecation 可以更严格限流：
@@ -212,7 +216,7 @@ Codex app-server 内部 thread 状态变化
 ### 第一阶段：通知推送策略
 
 1. 增加 notification router/mapper。
-2. 安全通知完整推送，绕过普通 progress suppression。
+2. 需要渠道展示的安全通知完整推送，绕过普通 progress suppression；自动审批成功提示仅记本机日志。
 3. archive/close 当前绑定时主动提示并解绑。
 4. thread rename 只更新本地 title。
 5. model reroute/verification 完整推送。
@@ -240,7 +244,7 @@ Codex app-server 内部 thread 状态变化
 
 ### 单元测试
 
-- `guardianWarning` 完整推送，不被 progress policy 禁用。
+- `guardianWarning` 的异常和未知内容完整推送，不被 progress policy 禁用；成功提示仅记本地日志且不产生发送回执。
 - `model/rerouted` 完整展示 from/to/reason。
 - `model/verification` 完整展示 verification 列表。
 - `thread/archived` 当前绑定解绑并提示 `/new`、`/resume`。

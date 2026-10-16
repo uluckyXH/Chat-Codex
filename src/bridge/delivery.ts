@@ -4,6 +4,7 @@ import { channelApprovalRequestFromPending } from "../approvals/channel-approval
 import type { Logger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelRegistry } from "../channels/registry.js";
+import type { CodexEvent } from "../codex/types.js";
 import type { ChannelMedia, ChannelTarget, ChannelToolProgress } from "../protocol/channel.js";
 import { extractBridgeSendFileRefs } from "./media-extractor.js";
 import { PROGRESS_SEND_FAILURE_COOLDOWN_MS, SEND_FILE_MAX_FILES } from "./bridge-types.js";
@@ -58,6 +59,17 @@ export class BridgeDelivery {
   async deliverText(target: ChannelTarget, text: string): Promise<void> {
     const result = await this.channels.sendText(target, text);
     this.transcript?.outbound(target, text, result);
+  }
+
+  logLocalNotification(target: ChannelTarget, event: Extract<CodexEvent, { type: "codex.notification" }>): void {
+    this.logger.info("Codex 通知仅本地记录（未投递）", {
+      ...deliveryLogMeta(target),
+      sessionId: event.sessionId,
+      ...(event.turnId.startsWith("notification:") ? { notificationId: event.turnId } : { turnId: event.turnId }),
+      method: event.notification.method,
+      kind: event.notification.kind,
+      text: event.notification.text,
+    });
   }
 
   async sendApprovalUntilDelivered(routeKey: string, target: ChannelTarget, pending: PendingApproval): Promise<void> {

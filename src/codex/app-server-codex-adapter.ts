@@ -13,6 +13,7 @@ import type {
   CodexModelListOptions,
   CodexModelOption,
   CodexModelPolicy,
+  CodexNotification,
   CodexProgressKind,
   CodexRunPolicyStatus,
   CodexSession,
@@ -41,7 +42,7 @@ import { codexInputText } from "./input.js";
 import { approvalFromServerRequest, responseForApprovalDecision } from "./app-server/approval-handler.js";
 import { goalFromResponse, goalFromSetResponse } from "./app-server/goal-api.js";
 import { appServerUserInput } from "./app-server/input-mapper.js";
-import { appServerErrorMessage, isTransientAppServerError } from "./app-server/notification-mapper.js";
+import { appServerErrorMessage, isTransientAppServerError, notificationText } from "./app-server/notification-mapper.js";
 import { unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "./app-server/server-request-mapper.js";
 import { mergeSessionSummaries, sessionDetailFromThread } from "./app-server/thread-list.js";
 import { readLastAssistantMessageFromPages } from "./app-server/thread-history.js";
@@ -975,9 +976,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
         method: notification.method,
         sessionId,
         turnId: this.notificationTurnId(sessionId, params, notification.method),
-        kind: warning.kind,
-        text: warning.text,
-        dedupeWindowMs: warning.dedupeWindowMs,
+        ...warning,
       });
     }
   }
@@ -1207,15 +1206,9 @@ export class AppServerCodexAdapter implements CodexAdapter {
     });
   }
 
-  private emitCodexNotification(notification: {
-    method: string;
+  private emitCodexNotification(notification: Omit<CodexNotification, "dedupeKey"> & {
     sessionId: string;
     turnId?: string;
-    kind: "security" | "warning" | "model" | "config" | "lifecycle" | "deprecation";
-    text: string;
-    dedupeWindowMs: number;
-    lifecycle?: "archived" | "closed" | "deleted" | "unarchived";
-    unbindRoute?: boolean;
   }): void {
     const stored = this.sessionStore.get(notification.sessionId);
     const turnId = notification.turnId ?? this.notificationTurnId(notification.sessionId, {}, notification.method);
@@ -1227,6 +1220,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
         method: notification.method,
         kind: notification.kind,
         text: notification.text,
+        ...(notification.visibility ? { visibility: notification.visibility } : {}),
         dedupeKey: notificationDedupeKey(notification.method, notification.sessionId, notification.text),
         dedupeWindowMs: notification.dedupeWindowMs,
         ...(notification.lifecycle ? { lifecycle: notification.lifecycle } : {}),
@@ -1243,35 +1237,6 @@ export class AppServerCodexAdapter implements CodexAdapter {
     if (stored?.currentTurnId) return stored.currentTurnId;
     return `notification:${sessionId}:${method}:${Date.now()}`;
   }
-}
-
-function notificationText(method: string, params: Record<string, unknown>): { text: string; kind: "security" | "warning" | "config" | "deprecation"; dedupeWindowMs: number } | undefined {
-  if (method === "warning") {
-    const message = stringValue(params.message);
-    return message ? { text: `Codex 警告：${message}`, kind: "warning", dedupeWindowMs: 10 * 60_000 } : undefined;
-  }
-  if (method === "guardianWarning") {
-    const message = stringValue(params.message);
-    return message ? { text: `Codex 安全提示：${message}`, kind: "security", dedupeWindowMs: 10 * 60_000 } : undefined;
-  }
-  if (method === "deprecationNotice") {
-    const summary = stringValue(params.summary);
-    const details = stringValue(params.details);
-    const text = summary ? [`Codex 兼容性提示：${summary}`, details].filter(Boolean).join("\n") : undefined;
-    return text ? { text, kind: "deprecation", dedupeWindowMs: 30 * 60_000 } : undefined;
-  }
-  if (method === "configWarning") {
-    const summary = stringValue(params.summary);
-    const details = stringValue(params.details);
-    const configPath = stringValue(params.path);
-    const text = summary ? [`Codex 配置警告：${summary}`, details, configPath ? `Path: ${configPath}` : undefined].filter(Boolean).join("\n") : undefined;
-    return text ? { text, kind: "config", dedupeWindowMs: 30 * 60_000 } : undefined;
-  }
-  if (method === "windows/worldWritableWarning") {
-    const message = stringValue(params.message) ?? stringValue(params.summary);
-    return message ? { text: `Codex Windows 沙箱警告：${message}`, kind: "warning", dedupeWindowMs: 30 * 60_000 } : undefined;
-  }
-  return undefined;
 }
 
 function notificationDedupeKey(method: string, sessionId: string, text: string): string {

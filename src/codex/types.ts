@@ -175,6 +175,8 @@ export interface CodexNotification {
   method: string;
   kind: CodexNotificationKind;
   text: string;
+  /** Adapter-assigned visibility; omitted notifications retain channel delivery. */
+  visibility?: "channel" | "local";
   dedupeKey: string;
   dedupeWindowMs: number;
   lifecycle?: CodexThreadLifecycleNotification;
