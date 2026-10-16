@@ -4,6 +4,9 @@
 
 ## 文档用途
 
+- `releases/v0.1.6.zh-CN.md`
+  Chat-Codex 0.1.6 发布说明，沿用 0.1.5 的安装／升级、新增、优化、修复及相关提交格式；覆盖上次发布以来的 Codex、微信、飞书与旁白改动。发布验证与实际结果见 `reports/tests/2026-10-16-release-0.1.6.md`。
+
 - `2026-10-15-codex-commentary-fragmentation-fix.zh-CN.md`
   Codex 旁白碎片化修复：按 item 完成发布全文，保留合并正文，按消息身份去重，前后台通过投递回执处理完整兜底。已完成 721 项全量回归；测试结果见 `reports/tests/2026-10-15-codex-commentary-fragmentation-fix.md`，故障电脑更新后仍需现场核验。
 

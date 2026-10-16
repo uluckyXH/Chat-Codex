@@ -1,6 +1,6 @@
 {
   "name": "chat-codex",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Connect local Codex to Weixin and Feishu through a terminal TUI.",
   "author": "小黄 and Codex",
   "license": "MIT",
@@ -42,6 +42,7 @@
     "test": "npm run build && node --test dist/tests/unit/*.test.js dist/tests/integration/*.test.js",
     "test:unit": "npm run build && node --test dist/tests/unit/*.test.js",
     "test:integration": "npm run build && node --test dist/tests/integration/*.test.js",
+    "test:package": "node scripts/test-release-package.mjs",
     "chat-codex": "npm run build && node dist/src/cli.js",
     "cli:chat-codex": "npm run build && node dist/src/cli.js",
     "cli:mock": "npm run build && node dist/src/cli.js test",
@@ -74,7 +75,7 @@
     "react": "^19.2.6"
   },
   "overrides": {
-    "axios": "^1.16.1",
-    "qs": "^6.15.2"
+    "axios": "^1.20.0",
+    "qs": "^6.16.0"
   }
 }
