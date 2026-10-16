@@ -1,6 +1,6 @@
 # 自动审批成功提示降噪设计（Issue #7）
 
-日期：2026-10-16。状态：**修复已实现；95 项定向、742 项全量、9 组独立安装包检查通过，准备发布 GitHub 0.1.7**。
+日期：2026-10-16。状态：**已随 [GitHub v0.1.7](https://github.com/uluckyXH/Chat-Codex/releases/tag/v0.1.7) 发布，Issue #7 已关闭；95 项定向、742 项全量、9 组独立安装包检查通过。npm 由用户手动发布**。
 
 问题来源：[Issue #7：微信收到过多的 codex 安全提示](https://github.com/uluckyXH/Chat-Codex/issues/7)。先完成排查与设计，随后用户授权修复、关闭关联 Issue 并发布 GitHub 新版本；npm 由用户手动发布。以下保留设计与修复前证据，实施状态以第 7 节和测试报告为准。
 
@@ -197,6 +197,7 @@ Automatic approval review timed out while evaluating the requested approval.
 | 2. 本地分流与日志 | 共用通知投递器在发送前返回；控制台／TUI 可见；重要通知列表不被成功提示挤占 | 已完成；12 组渠道／模式／前后台组合通过 |
 | 3. 自动化回归 | 增加下表测试，运行相关测试和全量 `npm test`，记录结果 | 95 项定向、742 项全量、9 组独立安装包检查通过；生产依赖审计 0 项漏洞 |
 | 4. 真实渠道验收 | 微信私聊、飞书私聊／群聊；检查成功提示、真实问题和最终回复 | 待执行 |
+| 5. 发布与 Issue | 推送修复、发布 GitHub、用提交与版本链接关闭 Issue | 已完成；修复 `a86c754`，标签 `v0.1.7`，Issue #7 状态 completed |
 | 后续增强 | 结构化审查事件、本地折叠／计数、通用发送优先级及失败恢复，分别设计验收 | 不阻塞第一阶段 |
 
 第一阶段测试矩阵：
@@ -225,3 +226,5 @@ Automatic approval review timed out while evaluating the requested approval.
 - 不引入已经关闭的 PR #10 的 `actions` 模式或 reasoning 内容调整。
 
 最终验收标准：成功审批在本机可查、在聊天中不刷屏；真正需要用户处理的事件和正常回复保持可达；结论由自动化发送计数与真实渠道回执分别支持。
+
+发布结果与 npm 手动发布步骤见[0.1.7 发布报告](../reports/tests/2026-10-16-release-0.1.7.md)；Issue 关联说明见[修复评论](https://github.com/uluckyXH/Chat-Codex/issues/7#issuecomment-6209423744)。真实平台验收状态如上，未以模拟结果替代。

@@ -97,4 +97,11 @@ node --test dist/tests/unit/bridge-notification-delivery.test.js dist/tests/unit
 
 `npm run test:package -- --keep`：**9 组检查通过**。真实 tarball 在隔离 prefix 安装，171 个运行模块齐全，CLI 版本返回 `0.1.7`；从安装目录执行的成功／拒绝通知与最终正文回归通过。mock 验证不代表微信／飞书线上回执验收。
 
-本机输出：`/private/tmp/chat-codex-release-0.1.7-tests.log`、`/private/tmp/chat-codex-release-0.1.7-audit.json`、`/private/tmp/chat-codex-release-0.1.7-package-test.log`。发布前记录显示所有本地门禁通过，GitHub 发布和 Issue 关闭将在完成后回写。
+本机输出：`/private/tmp/chat-codex-release-0.1.7-tests.log`、`/private/tmp/chat-codex-release-0.1.7-audit.json`、`/private/tmp/chat-codex-release-0.1.7-package-test.log`。
+
+## 发布与关闭结果
+
+- 修复提交：[a86c754](https://github.com/uluckyXH/Chat-Codex/commit/a86c75465afcf938807c45ee3518d985aa2b57dc)，已推送 main，提交正文关联 `Refs #7`。
+- GitHub 正式版本：[v0.1.7](https://github.com/uluckyXH/Chat-Codex/releases/tag/v0.1.7)，2026-10-16 14:18:46（Asia/Shanghai）发布，线上正文和远端标签已核验。
+- [Issue #7 修复评论](https://github.com/uluckyXH/Chat-Codex/issues/7#issuecomment-6209423744)包含提交与版本链接；Issue 于 14:20:17 按 completed 关闭。
+- npm 尚未发布；最后查询 latest 为 0.1.5。由用户手动发布 0.1.7，步骤见[发布验证报告](2026-10-16-release-0.1.7.md)。
